@@ -7,10 +7,10 @@
 
 * { box-sizing: border-box; }
 body { margin: 0; min-width: 320px; min-height: 100vh; }
-button { font: inherit; }
+button, input { font: inherit; }
 
 .shell {
-  width: min(1120px, calc(100% - 32px));
+  width: min(1180px, calc(100% - 32px));
   margin: 0 auto;
   padding: 48px 0 64px;
 }
@@ -20,18 +20,6 @@ header h1 { margin: 4px 0 8px; font-size: clamp(2rem, 5vw, 4rem); letter-spacing
 header p { margin: 0; color: #ababbd; }
 .eyebrow { font-size: 0.78rem; letter-spacing: 0.16em; font-weight: 800; }
 
-.toolbar { display: flex; gap: 8px; margin: 24px 0; }
-.toolbar button {
-  border: 1px solid #4b4b60;
-  border-radius: 8px;
-  padding: 9px 14px;
-  color: inherit;
-  background: #222231;
-  cursor: pointer;
-}
-.toolbar button:hover { background: #2d2d40; }
-
-.grid { display: grid; grid-template-columns: 1fr 2fr; gap: 16px; }
 .panel {
   border: 1px solid #303044;
   border-radius: 12px;
@@ -40,9 +28,70 @@ header p { margin: 0; color: #ababbd; }
   overflow: auto;
 }
 .panel h2 { margin: 0 0 12px; font-size: 0.86rem; text-transform: uppercase; letter-spacing: 0.12em; color: #aaaac2; }
-pre { margin: 0; font: 14px/1.55 "SFMono-Regular", Consolas, "Liberation Mono", monospace; }
-.trace-panel { margin-top: 16px; min-height: 320px; }
+.panel p { margin: 0; color: #9c9caf; }
+.panel-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; }
+.panel-heading h2 { margin-bottom: 6px; }
 
-@media (max-width: 760px) {
+.status-pill {
+  flex: 0 0 auto;
+  border: 1px solid #44445b;
+  border-radius: 999px;
+  padding: 6px 10px;
+  color: #b8b8c8;
+  font-size: 0.8rem;
+}
+.status-pill.ready { border-color: #5f8068; color: #c5ebcf; }
+
+.rom-panel { margin-top: 22px; }
+.rom-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-top: 18px; }
+.rom-input {
+  display: grid;
+  gap: 5px;
+  border: 1px solid #333348;
+  border-radius: 10px;
+  padding: 14px;
+  background: #12121a;
+}
+.rom-input span { font-weight: 700; }
+.rom-input small { color: #8f8fa4; }
+.rom-input input { width: 100%; margin-top: 6px; color: #bdbdcb; }
+.rom-input em { min-height: 1.2em; overflow: hidden; color: #87879b; font-size: 0.78rem; font-style: normal; text-overflow: ellipsis; white-space: nowrap; }
+.rom-input em.valid { color: #a9ddb6; }
+.rom-input em.invalid { color: #ffb0b0; white-space: normal; }
+
+.toolbar { display: flex; flex-wrap: wrap; gap: 8px; margin: 18px 0; }
+.toolbar button {
+  border: 1px solid #4b4b60;
+  border-radius: 8px;
+  padding: 9px 14px;
+  color: inherit;
+  background: #222231;
+  cursor: pointer;
+}
+.toolbar button:hover:not(:disabled) { background: #2d2d40; }
+.toolbar button:disabled { opacity: 0.42; cursor: not-allowed; }
+
+.error-banner {
+  margin: 0 0 16px;
+  border: 1px solid #764747;
+  border-radius: 10px;
+  padding: 12px 14px;
+  color: #ffc5c5;
+  background: #281819;
+  font: 13px/1.5 "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+}
+
+.grid { display: grid; grid-template-columns: 0.8fr 1fr 1fr 1.7fr; gap: 16px; }
+.wide-panel { min-width: 0; }
+pre { margin: 0; font: 14px/1.55 "SFMono-Regular", Consolas, "Liberation Mono", monospace; }
+.trace-panel { margin-top: 16px; min-height: 360px; }
+
+@media (max-width: 900px) {
+  .rom-grid { grid-template-columns: 1fr; }
   .grid { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 620px) {
+  .shell { width: min(100% - 20px, 1180px); padding-top: 28px; }
+  .panel-heading { flex-direction: column; }
 }
