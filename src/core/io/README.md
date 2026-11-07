@@ -2,30 +2,30 @@
 
 ## Overview
 
-This directory owns CPU-visible device routing for the `$D000-$DFFF` C64 I/O window. The address decode is real. As of v0.3, both CIA regions contain functional MOS 6526 devices; VIC-II and SID remain explicit register-file placeholders until their dedicated phases. Color RAM is modeled separately because it is dedicated 4-bit memory rather than a normal chip register bank.
+This directory owns CPU-visible device routing for the `$D000-$DFFF` C64 I/O window. As of v0.4 the VIC-II and both CIA regions contain functional device models. SID remains an explicit register-file placeholder. Color RAM is dedicated 4-bit memory rather than a normal chip register bank.
 
 ## Architecture
 
-`C64Io` is the single router used by `C64Bus` whenever CHAREN and the active memory configuration expose I/O. It divides the 4 KiB window into the C64 regions:
+`C64Io` divides the 4 KiB I/O window into the stock regions:
 
-- `$D000-$D3FF` — VIC-II, 64 registers mirrored through 1 KiB (placeholder in v0.3)
-- `$D400-$D7FF` — SID, 32 registers mirrored through 1 KiB (placeholder in v0.3)
+- `$D000-$D3FF` — VIC-II, registers mirrored every `$40`
+- `$D400-$D7FF` — SID, 32-register placeholder mirrored every `$20`
 - `$D800-$DBFF` — 1 KiB color RAM
-- `$DC00-$DCFF` — CIA #1, real 6526, 16 registers mirrored through 256 bytes
-- `$DD00-$DDFF` — CIA #2, real 6526, 16 registers mirrored through 256 bytes
+- `$DC00-$DCFF` — CIA #1, 16 registers mirrored every `$10`
+- `$DD00-$DDFF` — CIA #2, 16 registers mirrored every `$10`
 - `$DE00-$DEFF` — expansion I/O 1
 - `$DF00-$DFFF` — expansion I/O 2
 
-Every device implements `MemoryMappedDevice`, keeping normal reads distinct from side-effect-free debugger peeks. This matters now: reading a CIA ICR acknowledges its pending interrupt sources, while peeking the same register must not.
+Every device implements `MemoryMappedDevice`, keeping normal reads distinct from side-effect-free debugger peeks.
 
 ## Implementation Discussion
 
-`RegisterFileDevice` remains only for VIC-II and SID. It is not intended to fake those chips. CIA1/CIA2 are `Cia6526` instances from `core/cia` and receive PHI2 cycles from `C64Machine`.
+The VIC-II receives a `VicMemory` provider from `C64Bus`; it does not read through the CPU-visible I/O router. This prevents the common emulator mistake of making VIC fetches obey CPU CHAREN/BASIC/KERNAL banking.
 
-CIA1 is wired to the `KeyboardMatrix` and two active-low joystick pin images. Port A corresponds to keyboard columns / joystick 2 and Port B to keyboard rows / joystick 1. The keyboard wiring supports the normal KERNAL scan direction and reverse-direction scans without embedding browser key names in the core.
+`C64Io.tick()` advances VIC-II and both CIAs. `C64Machine` invokes it one system cycle at a time so all timed I/O shares the master clock.
 
-CIA2 currently treats unimplemented IEC/user-port inputs as pulled high. Its Port A bits 0-1 are consumed by `C64Bus` to derive the inverted VIC 16 KiB bank selection. IEC electrical behavior will be added when drive/serial-bus emulation begins.
+CIA1 remains wired to the keyboard matrix and active-low joystick pin images. CIA2 Port A bits 0-1 select the VIC bank through the real inverted mapping. IEC electrical behavior remains deferred.
 
-Color RAM stores only its low four bits and is preserved across machine reset because it is RAM rather than a resettable register file. A deterministic cold power-on explicitly clears it. Until an open-bus model exists, its undefined high nibble reads as `$F`.
+Color RAM stores only its low four bits and survives reset because it is RAM. Deterministic cold power-on clears it. Until an open-bus model exists, its undefined high nibble reads as `$F`.
 
-The expansion I/O areas use `OpenBusDevice`. Returning `$FF` there remains a deterministic temporary policy, not a claim about every real cartridge/open-bus condition.
+The expansion I/O areas use `OpenBusDevice`; `$FF` remains a deterministic temporary policy, not a claim about all real cartridge/open-bus conditions.

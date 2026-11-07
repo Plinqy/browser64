@@ -95,3 +95,23 @@ pre { margin: 0; font: 14px/1.55 "SFMono-Regular", Consolas, "Liberation Mono", 
   .shell { width: min(100% - 20px, 1180px); padding-top: 28px; }
   .panel-heading { flex-direction: column; }
 }
+
+.display-panel { margin-bottom: 16px; }
+.screen-wrap {
+  display: grid;
+  place-items: center;
+  margin-top: 18px;
+  padding: 18px;
+  border: 1px solid #2b2b3c;
+  border-radius: 10px;
+  background: #09090d;
+  overflow: auto;
+}
+#vic-screen {
+  width: min(768px, 100%);
+  height: auto;
+  aspect-ratio: 384 / 272;
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+  box-shadow: 0 0 0 1px #000;
+}

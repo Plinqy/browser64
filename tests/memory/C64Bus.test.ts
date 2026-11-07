@@ -151,3 +151,43 @@ describe('C64Bus CIA2 VIC bank selection', () => {
     }
   });
 });
+
+describe('C64Bus VIC-II memory view', () => {
+  it('applies CIA2 bank selection independently from CPU banking', () => {
+    const bus = new C64Bus();
+    const character = new Uint8Array(0x1000);
+    character[0] = 0x5a;
+    bus.roms.load('character', character);
+
+    bus.writePhysicalRam(0x1000, 0x11);
+    bus.writePhysicalRam(0x5000, 0x22);
+
+    // CIA2 inputs are high after reset, selecting VIC bank 0.
+    expect(bus.vicBankNumber).toBe(0);
+    expect(bus.readVicMemory(0x1000)).toBe(0x5a);
+
+    // CIA2 PA1..PA0 = %10 selects bank 1 ($4000-$7FFF).
+    bus.io.cia2.write(0x02, 0x03);
+    bus.io.cia2.write(0x00, 0x02);
+    expect(bus.vicBankNumber).toBe(1);
+    expect(bus.readVicMemory(0x1000)).toBe(0x22);
+  });
+
+  it('shadows character ROM in VIC banks 0 and 2 but not banks 1 and 3', () => {
+    const bus = new C64Bus();
+    const character = new Uint8Array(0x1000);
+    character[0x0123] = 0xa7;
+    bus.roms.load('character', character);
+
+    bus.writePhysicalRam(0x1123, 0x10);
+    bus.writePhysicalRam(0x5123, 0x11);
+    bus.writePhysicalRam(0x9123, 0x12);
+    bus.writePhysicalRam(0xd123, 0x13);
+    bus.io.cia2.write(0x02, 0x03);
+
+    for (const [pins, expected] of [[0x03, 0xa7], [0x02, 0x11], [0x01, 0xa7], [0x00, 0x13]] as const) {
+      bus.io.cia2.write(0x00, pins);
+      expect(bus.readVicMemory(0x1123)).toBe(expected);
+    }
+  });
+});

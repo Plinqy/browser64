@@ -2,8 +2,11 @@ import './ui/styles.css';
 import {
   BASIC_ROM_SIZE,
   C64Machine,
+  C64_PALETTE,
   CHARACTER_ROM_SIZE,
   KERNAL_ROM_SIZE,
+  VIC_FRAMEBUFFER_HEIGHT,
+  VIC_FRAMEBUFFER_WIDTH,
   type C64RomKind
 } from './core';
 
@@ -22,7 +25,7 @@ app.innerHTML = `
     <header>
       <p class="eyebrow">FROM-SCRATCH C64 EMULATOR</p>
       <h1>Commodore 64 Development Console</h1>
-      <p>v0.3 — 6510 core, C64 banking, and functional MOS 6526 CIA chips.</p>
+      <p>v0.4 — 6510, MOS 6526 CIAs, timed VIC-II raster foundation, and standard text output.</p>
     </header>
 
     <article class="panel rom-panel">
@@ -46,9 +49,23 @@ app.innerHTML = `
       <button id="reset" disabled>Reset</button>
       <button id="step" disabled>Step</button>
       <button id="run100" disabled>Run 100</button>
+      <button id="run-frame" disabled>Run Frame</button>
     </section>
 
     <div id="error" class="error-banner" hidden></div>
+
+    <article class="panel display-panel">
+      <div class="panel-heading">
+        <div>
+          <h2>VIC-II display</h2>
+          <p>Standard 40×25 hires text mode. The framebuffer is color-indexed inside the emulator core.</p>
+        </div>
+        <div id="vic-position" class="status-pill"></div>
+      </div>
+      <div class="screen-wrap">
+        <canvas id="vic-screen" width="${VIC_FRAMEBUFFER_WIDTH}" height="${VIC_FRAMEBUFFER_HEIGHT}"></canvas>
+      </div>
+    </article>
 
     <section class="grid">
       <article class="panel">
@@ -60,7 +77,7 @@ app.innerHTML = `
         <pre id="memory-map"></pre>
       </article>
       <article class="panel">
-        <h2>CIA / VIC bank</h2>
+        <h2>CIA / VIC</h2>
         <pre id="cia-state"></pre>
       </article>
       <article class="panel wide-panel">
@@ -83,10 +100,16 @@ const disassemblyElement = mustElement('disassembly');
 const traceElement = mustElement('trace');
 const errorElement = mustElement('error');
 const romCompleteElement = mustElement('rom-complete');
+const vicPositionElement = mustElement('vic-position');
+const vicCanvas = mustCanvas('vic-screen');
+const vicContext = must2dContext(vicCanvas);
+const vicImage = vicContext.createImageData(VIC_FRAMEBUFFER_WIDTH, VIC_FRAMEBUFFER_HEIGHT);
+
 const powerOnButton = mustButton('power-on');
 const resetButton = mustButton('reset');
 const stepButton = mustButton('step');
 const run100Button = mustButton('run100');
+const runFrameButton = mustButton('run-frame');
 
 for (const kind of ['basic', 'kernal', 'character'] as const) {
   const input = mustInput(`rom-${kind}`);
@@ -167,6 +190,24 @@ run100Button.addEventListener('click', () => {
   render();
 });
 
+runFrameButton.addEventListener('click', () => {
+  if (!poweredOn) {
+    return;
+  }
+
+  try {
+    const startFrame = machine.bus.io.vic.frameNumber;
+    const executed = machine.runFrame();
+    traceLines.push(
+      `RUN FRAME ${startFrame} -> ${machine.bus.io.vic.frameNumber} (${executed} instructions)`
+    );
+    lastError = '';
+  } catch (error) {
+    lastError = errorMessage(error);
+  }
+  render();
+});
+
 updateControls();
 render();
 
@@ -186,6 +227,7 @@ function doStep(): void {
 function render(): void {
   const cpu = machine.cpu;
   const config = machine.bus.configuration;
+  const vic = machine.bus.io.vic;
 
   registersElement.textContent = poweredOn
     ? [
@@ -195,7 +237,8 @@ function render(): void {
         `Y    $${hex(cpu.y, 2)}`,
         `SP   $${hex(cpu.sp, 2)}`,
         `P    %${cpu.status.toString(2).padStart(8, '0')}`,
-        `CYC  ${cpu.cycles}`
+        `CPU CYC  ${cpu.cycles}`,
+        `SYS CYC  ${machine.masterCycles}`
       ].join('\n')
     : 'Load all three ROMs, then Power On.';
 
@@ -216,17 +259,20 @@ function render(): void {
   ciaStateElement.textContent = [
     `CIA1 TA       $${hex(machine.bus.io.cia1.timerACounter, 4)}`,
     `CIA1 TB       $${hex(machine.bus.io.cia1.timerBCounter, 4)}`,
-    `CIA1 ICR      $${hex(machine.bus.io.cia1.peek(0x0d), 2)}`,
     `CIA1 IRQ      ${machine.bus.io.cia1.irqAsserted ? 'ASSERTED' : 'clear'}`,
     '',
     `CIA2 PA       $${hex(machine.bus.io.cia2.portAPins, 2)}`,
-    `CIA2 DDRA     $${hex(machine.bus.io.cia2.dataDirectionA, 2)}`,
-    `CIA2 ICR      $${hex(machine.bus.io.cia2.peek(0x0d), 2)}`,
-    `CIA2 IRQ/NMI  ${machine.bus.io.cia2.irqAsserted ? 'ASSERTED' : 'clear'}`,
+    `VIC BANK      ${machine.bus.vicBankNumber} ($${hex(machine.bus.vicBankBase, 4)})`,
     '',
-    `VIC BANK      ${machine.bus.vicBankNumber}`,
-    `VIC BASE      $${hex(machine.bus.vicBankBase, 4)}`
+    `RASTER        ${vic.rasterLine}:${vic.rasterCycle}`,
+    `RASTER CMP    $${hex(vic.rasterCompare, 3)}`,
+    `VIC IRQ       ${vic.irqAsserted ? 'ASSERTED' : 'clear'}`,
+    `FRAME         ${vic.frameNumber}`,
+    `SCREEN        +$${hex(vic.screenMemoryOffset, 4)}`,
+    `CHARS         +$${hex(vic.characterMemoryOffset, 4)}`
   ].join('\n');
+
+  vicPositionElement.textContent = `${vic.timing.chip} · line ${vic.rasterLine} · cycle ${vic.rasterCycle}`;
 
   disassemblyElement.textContent = poweredOn
     ? machine.disassembler
@@ -251,6 +297,24 @@ function render(): void {
     romCompleteElement.textContent = `${loadedCount}/3 ROMs loaded`;
     romCompleteElement.classList.remove('ready');
   }
+
+  renderVicCanvas();
+}
+
+function renderVicCanvas(): void {
+  const frame = machine.bus.io.vic.renderFrame();
+  const pixels = vicImage.data;
+
+  for (let index = 0; index < frame.length; index += 1) {
+    const [red, green, blue] = C64_PALETTE[frame[index] ?? 0] ?? C64_PALETTE[0]!;
+    const target = index * 4;
+    pixels[target] = red;
+    pixels[target + 1] = green;
+    pixels[target + 2] = blue;
+    pixels[target + 3] = 0xff;
+  }
+
+  vicContext.putImageData(vicImage, 0, 0);
 }
 
 function updateControls(): void {
@@ -258,6 +322,7 @@ function updateControls(): void {
   resetButton.disabled = !poweredOn;
   stepButton.disabled = !poweredOn;
   run100Button.disabled = !poweredOn;
+  runFrameButton.disabled = !poweredOn;
 }
 
 function setRomStatus(kind: C64RomKind, text: string, valid: boolean): void {
@@ -304,6 +369,22 @@ function mustInput(id: string): HTMLInputElement {
     throw new Error(`Missing input #${id}.`);
   }
   return element;
+}
+
+function mustCanvas(id: string): HTMLCanvasElement {
+  const element = document.getElementById(id);
+  if (!(element instanceof HTMLCanvasElement)) {
+    throw new Error(`Missing canvas #${id}.`);
+  }
+  return element;
+}
+
+function must2dContext(canvas: HTMLCanvasElement): CanvasRenderingContext2D {
+  const context = canvas.getContext('2d');
+  if (context === null) {
+    throw new Error('2D canvas context is unavailable.');
+  }
+  return context;
 }
 
 function errorMessage(error: unknown): string {

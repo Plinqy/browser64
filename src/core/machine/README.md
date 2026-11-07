@@ -2,9 +2,9 @@
 
 ## Overview
 
-This directory is the composition root for a complete Commodore 64 instance. `C64Machine` owns the CPU, C64 bus, ROM set, I/O devices, debugger/disassembler, execution trace, and the first explicit machine timing boundary.
+This directory is the composition root for a complete Commodore 64 instance. `C64Machine` owns the CPU, C64 bus, I/O chips, debugger/disassembler, execution trace, interrupt wiring, and the master system-cycle boundary.
 
-Version 0.3 integrates the two MOS 6526 CIA chips with CPU execution and interrupt wiring. VIC-II and SID still await their dedicated implementations.
+Version 0.4 promotes timing from instruction-proportional CIA advancement to a shared one-cycle scheduler for VIC-II and both CIA chips.
 
 ## Architecture
 
@@ -14,28 +14,32 @@ C64Machine
 │   ├── 64 KiB physical RAM
 │   ├── C64Roms
 │   └── C64Io
-│       ├── VIC-II placeholder
+│       ├── VIC-II ---------> 6510 IRQ
 │       ├── SID placeholder
 │       ├── Color RAM
-│       ├── CIA1 (6526) ---> 6510 IRQ
-│       └── CIA2 (6526) ---> 6510 NMI edge
+│       ├── CIA1 -----------> 6510 IRQ
+│       └── CIA2 -----------> 6510 NMI edge
 ├── Cpu6510
 ├── Disassembler
 └── TraceFormatter
 ```
 
-The CPU still sees only the generic `Bus` interface. Browser code constructs one `C64Machine` and should use `machine.step()` rather than calling `cpu.step()` directly so peripheral time and interrupt wiring stay synchronized.
+Browser code should execute through `C64Machine`, not call `cpu.step()` directly, so clocks and interrupt wiring stay synchronized.
 
 ## Implementation Discussion
 
-`powerOn()` clears main RAM and color RAM deterministically, resets the processor port and I/O chips, then resets the CPU through the mapped KERNAL reset vector. `reset()` preserves RAM/color RAM and external keyboard/joystick state while resetting the processor and resettable chips.
+`powerOn()` clears main RAM/color RAM deterministically, resets the processor port and I/O chips, resets the CPU through the KERNAL vector, and advances the returned reset cycles through the master clock. `reset()` preserves RAM/color RAM and external keyboard/joystick state while resetting the processor and resettable chips.
 
-### v0.3 scheduler boundary
+### Master cycle
 
-The CPU is still instruction-granular: one `Cpu6510.step()` executes an entire instruction and returns its cycle count. `C64Machine.step()` then advances both CIA chips by exactly that many PHI2 cycles. This makes timers deterministic and correctly proportional to CPU execution without pretending the emulator already has cycle-by-cycle VIC arbitration.
+`tickSystemCycle()` advances VIC-II and both CIA chips by one system cycle, increments the machine master-cycle counter, and synchronizes CPU interrupt inputs.
 
-CIA1's interrupt output is level-wired to the 6510 IRQ input. CIA2's interrupt output is wired to NMI; the machine tracks its previous state and only pulses the CPU when CIA2 changes from non-asserted to asserted, matching NMI edge semantics.
+CIA1 and VIC-II are ORed onto the 6510's level-sensitive IRQ input. CIA2 drives NMI; the machine detects a CIA2 interrupt-output rising assertion and converts it into one CPU NMI edge.
 
-`setRestorePressed()` drives CIA2's active-low FLAG input, reflecting the C64 RESTORE path. `pulseTod()` supplies one external 50/60 Hz TOD input pulse to both CIAs; wall-clock scheduling of those pulses belongs to the browser/runtime layer rather than the deterministic core.
+### Remaining CPU timing limitation
 
-A later VIC-II phase will replace instruction-granular peripheral advancement with a true master-cycle scheduler. The public machine boundary introduced here is intended to survive that transition.
+`Cpu6510.step()` still executes a complete instruction before the returned cycles are replayed. Therefore a CPU write to a VIC/CIA register occurs before the individual cycles of that instruction are advanced. This is not yet sufficient for bad lines, stable-raster code, or exact BA/AEC behavior.
+
+The machine API is intentionally ready for the CPU to become resumable at one bus cycle/micro-operation at a time. When that happens, `tickSystemCycle()` remains the clock boundary and VIC/CIAS do not need to be redesigned.
+
+`runFrame()` is a convenience loop for development: it executes whole instructions until the VIC frame counter advances.

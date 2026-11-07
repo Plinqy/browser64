@@ -1,5 +1,6 @@
 import { Cia6526 } from '../cia/Cia6526';
 import { KeyboardMatrix } from '../cia/KeyboardMatrix';
+import { VicII, type VicMemory } from '../vic/VicII';
 import { ColorRam } from './ColorRam';
 import type { MemoryMappedDevice } from './Device';
 import { OpenBusDevice } from './OpenBusDevice';
@@ -8,11 +9,11 @@ import { RegisterFileDevice } from './RegisterFileDevice';
 /**
  * Routes CPU accesses inside the C64's $D000-$DFFF I/O window.
  *
- * v0.3 replaces both CIA placeholders with functional MOS 6526 devices while
- * VIC-II and SID remain explicit register-file placeholders until their phases.
+ * v0.4 replaces the VIC-II register placeholder with a timed VIC device while
+ * SID remains an explicit register-file placeholder until its later phase.
  */
 export class C64Io implements MemoryMappedDevice {
-  public readonly vic = new RegisterFileDevice(0x40, 0x3f);
+  public readonly vic: VicII;
   public readonly sid = new RegisterFileDevice(0x20, 0x1f);
   public readonly colorRam = new ColorRam();
   public readonly cia1 = new Cia6526();
@@ -24,7 +25,9 @@ export class C64Io implements MemoryMappedDevice {
   private joystick1Pins = 0xff;
   private joystick2Pins = 0xff;
 
-  constructor() {
+  constructor(vicMemory?: VicMemory) {
+    this.vic = new VicII(vicMemory);
+
     // CIA1 Port A normally drives keyboard columns and shares pins with
     // joystick 2. Port B normally reads rows and shares pins with joystick 1.
     // The matrix is symmetric so reverse-direction scans work as well.
@@ -67,6 +70,7 @@ export class C64Io implements MemoryMappedDevice {
   }
 
   tick(cycles: number): void {
+    this.vic.tick(cycles);
     this.cia1.tick(cycles);
     this.cia2.tick(cycles);
   }

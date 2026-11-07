@@ -2,16 +2,17 @@
 
 ## Overview
 
-`src/core` contains the platform-independent emulator implementation. Code in this tree must not depend on browser APIs, DOM objects, Canvas, Web Audio, timers, or UI state. The goal is a deterministic machine core that can run under a browser frontend, Node test harness, command-line debugger, or future host without changing emulated behavior.
+`src/core` contains the platform-independent emulator implementation. Code in this tree must not depend on browser APIs, DOM objects, Canvas, Web Audio, timers, or UI state. The core is deterministic and can run under a browser frontend, Node test harness, command-line debugger, or future host.
 
-Version 0.3 contains:
+Version 0.4 contains:
 
 - `cpu/` — validated NMOS 6502 instruction engine forming the computational core of the MOS 6510.
-- `memory/` — generic bus contracts plus stock C64 RAM/ROM/processor-port banking.
+- `memory/` — generic bus contracts plus stock C64 CPU banking and the independent VIC memory view.
 - `rom/` — motherboard BASIC/KERNAL/character ROM ownership and validation.
-- `io/` — C64 `$D000-$DFFF` device routing, color RAM, and current chip composition.
+- `io/` — C64 `$D000-$DFFF` device routing, color RAM, SID placeholder, VIC and CIA composition.
 - `cia/` — functional MOS 6526 CIA chips and C64 keyboard switch matrix.
-- `machine/` — complete machine composition, peripheral advancement, IRQ/NMI wiring.
+- `vic/` — timed VIC-II register/raster/text-rendering foundation.
+- `machine/` — complete machine composition, one-cycle master clock, IRQ/NMI wiring.
 - `debugger/` — side-effect-free disassembly and execution trace formatting.
 
 Every directory under `src/core` must contain a `README.md` describing its overview, architecture, and implementation decisions.
@@ -19,35 +20,32 @@ Every directory under `src/core` must contain a `README.md` describing its overv
 ## Architecture
 
 ```text
-Browser/UI
-    |
-    v
-C64Machine
-    |
-    +------ Cpu6510 ------------------+
-    |                                  |
-    +------ C64Bus <-------------------+
-    |         |
-    |         +-- RAM / ROM / 6510 port
-    |         +-- C64Io
-    |              +-- CIA1 --> IRQ
-    |              +-- CIA2 --> NMI / VIC bank
-    |              +-- VIC placeholder
-    |              +-- SID placeholder
-    |              +-- Color RAM
-    |
-    +------ Debugger / trace
+Host / browser
+     |
+     v
+ C64Machine
+     |
+     +-- Cpu6510 ----> C64Bus CPU view
+     |
+     +-- master-cycle scheduler
+     |       +-- VIC-II ----> C64Bus VIC view
+     |       +-- CIA1
+     |       +-- CIA2
+     |
+     +-- Debugger / trace
 ```
 
-The CPU knows only about `Bus`. Device decoding and banking are outside the instruction engine. Hardware register reads may have side effects; debugger inspection uses `peek()` and must not acknowledge interrupts or alter latches.
+The CPU knows only about `Bus`. The VIC has a separate 14-bit memory interface because its hardware view differs from the 6510's PLA-banked view. Hardware register reads may have side effects; debugger inspection uses `peek()` and must not acknowledge interrupts or alter latches.
 
 ## Implementation Discussion
 
 ### Timing model
 
-The CPU still executes one complete instruction per `Cpu6510.step()`. Correct documented instruction cycle totals are returned. Starting in v0.3, `C64Machine.step()` uses those totals to advance CIA timers and then synchronizes interrupt lines.
+The machine now has a true one-system-cycle peripheral boundary: `C64Machine.tickSystemCycle()` advances VIC and CIA state one cycle at a time.
 
-This is an intentional intermediate architecture. It is accurate enough for instruction-proportional CIA timing and KERNAL startup work, but it cannot yet model a VIC-II stealing a particular bus cycle in the middle of an instruction. The upcoming VIC phase will introduce per-cycle arbitration behind the machine-level API rather than putting timing logic in the browser.
+The 6510 itself remains instruction-granular. `Cpu6510.step()` performs its bus accesses atomically and returns a cycle total, after which `C64Machine.step()` advances the rest of the machine by that number of cycles. This means raster counters and timer totals are correct at the cycle-count level, while intra-instruction memory-access placement and VIC CPU stalls are not yet modeled.
+
+That limitation is deliberately isolated to the CPU execution boundary so the next phase can add resumable bus-cycle micro-operations without rewriting the VIC, CIA, bus, debugger, or browser frontend contracts.
 
 ### Determinism
 
@@ -55,4 +53,4 @@ Core code does not call wall-clock or random APIs. TOD input is supplied explici
 
 ### Testing philosophy
 
-Correctness is validated bottom-up: CPU/bus primitives, C64 banking, chip-local behavior, address decode, and finally machine-level integration. External compatibility suites are additive; they do not replace focused tests that identify exactly which contract failed.
+Correctness is validated bottom-up: CPU/bus primitives, C64 banking, chip-local behavior, address decode, VIC memory visibility/rendering, and finally machine-level interrupt/timing integration. External compatibility suites are additive; they do not replace focused tests that identify exactly which contract failed.

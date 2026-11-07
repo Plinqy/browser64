@@ -1,18 +1,18 @@
-# Verification — v0.3
+# Verification — v0.4
 
-This file records verification performed on the v0.3 source tree.
+This file records verification performed on the v0.4 source tree.
 
 ## Result
 
-**PASS for the TypeScript and direct runtime verification available in this execution environment.**
+**PASS for strict TypeScript and direct runtime verification available in this execution environment.**
 
-The npm registry was not reachable: `npm install` timed out, so the repository's pinned Vite/Vitest packages could not be installed and `npm test` / `npm run build` could not honestly be claimed as executed here.
+`npm install` was attempted but the package registry did not respond before the execution timeout. The repository's pinned Vite/Vitest dependencies therefore could not be installed here, so `npm test` and `npm run build` are not claimed as executed.
 
-To compensate, the project was checked with the locally available TypeScript compiler and an independently compiled CommonJS copy of the complete emulator core was exercised with direct Node assertions.
+The emulator source was instead checked with the locally available TypeScript compiler, the complete source/test tree was typechecked with verification-only dependency declarations, and an independently compiled CommonJS copy of `src/core` was exercised directly under Node.
 
 ## Strict TypeScript
 
-The browser source passed strict source-level compilation with the repository's relevant compiler constraints:
+The complete browser/core source passed strict compilation with the repository's relevant constraints:
 
 - `strict`
 - `noUncheckedIndexedAccess`
@@ -24,64 +24,75 @@ The browser source passed strict source-level compilation with the repository's 
 
 Result: **PASS**
 
-The complete source + test tree was also typechecked using temporary local declarations for `vitest`, `vitest/config`, and the Node modules referenced by the external test. Those declarations were verification-only and are not included in the repository.
+The complete `src` + `tests` + `vite.config.ts` tree was also typechecked using temporary local declarations for `vitest`, `vitest/config`, and the Node built-ins referenced by the optional Klaus test. Those declarations are verification-only and are not included in the project.
 
 Result: **PASS**
 
-## v0.3 CIA Direct Runtime Assertions
+## v0.4 VIC-II Direct Runtime Assertions
 
 An independently compiled copy of `src/core` was exercised directly under Node. Assertions covered:
 
-- 6526 reset port/timer/interrupt state
-- DDR/output-latch/external-pin resolution
-- Timer A continuous count, zero underflow, and latch reload
-- Timer A one-shot stop behavior
-- Timer B counting Timer A underflows
-- pending interrupt source behavior while masked
-- enabling/disabling ICR masks after an interrupt source is already pending
-- ICR `peek()` preserving pending state
-- ICR `read()` acknowledging sources and releasing IRQ
-- Timer A CNT input mode
-- FLAG high-to-low edge detection
-- SDR serial input over eight CNT rising edges
-- 60 Hz TOD divider
-- 11:59:59.9 AM -> 12:00:00.0 PM rollover
-- TOD hours-read latching and tenths-read release
-- TOD alarm match interrupt
-- keyboard matrix forward scan
-- keyboard matrix reverse scan
-- CIA1 keyboard + joystick active-low combination
-- CIA2 inverted PA0/PA1 VIC bank selection
-- all four VIC bank bases
-- machine-level CIA cycle advancement from CPU instruction cycles
-- CIA1 -> 6510 IRQ delivery
-- CIA2/RESTORE FLAG -> 6510 NMI edge delivery
+- PAL 6569 timing profile of 63 cycles per line
+- 312 PAL raster lines per frame
+- 19,656 cycles per PAL frame
+- raster line/cycle wrap behavior
+- frame counter advancement
+- nine-bit raster compare foundation
+- raster interrupt latching
+- `$D019` IRQ status and write-one-to-clear acknowledgement
+- `$D01A` raster interrupt masking
+- live raster high-bit read through `$D011`
+- live raster low-byte read through `$D012`
+- CIA2-selected VIC bank changes
+- VIC character-ROM shadowing in banks 0 and 2
+- RAM visibility instead of character ROM in VIC banks 1 and 3
+- standard-text screen-code fetch
+- character-glyph fetch
+- color-RAM nibble fetch
+- border/background color rendering
+- display-disable border behavior
+- machine master-cycle accounting
+- VIC raster IRQ delivery to the 6510 IRQ input
 
 Result: **PASS**
 
-## v0.2 Regression Smoke Assertions
+## v0.3 Regression Assertions
 
-Because the supplied archive was the v0.1 tree, the previously completed v0.2 machine/banking layer was restored before v0.3 was applied. A direct regression pass covered:
-
-- all eight LORAM/HIRAM/CHAREN combinations
-- BASIC/KERNAL/character/I/O selection
-- RAM-under-ROM writes
-- synthetic KERNAL reset vector execution
-- retained official opcode table count of 151
+The v0.3 direct runtime assertion suite was rerun against the v0.4 compiled core. It covers the MOS 6526 timer, ICR, FLAG, CNT, serial-input, TOD/alarm, keyboard matrix, joystick wiring, CIA2 VIC-bank selection, CIA1 IRQ delivery, and CIA2/RESTORE NMI integration.
 
 Result: **PASS**
 
-## External Klaus CPU Test
+## v0.2 Regression Assertions
 
-The v0.3 artifact does not redistribute the third-party Klaus binary. The CPU implementation itself is unchanged from the previously verified v0.2 core, which had reached the Klaus NMOS 6502 functional suite success trap `$3469` after 30,646,177 instructions.
+The v0.2 machine/banking smoke suite was rerun against the v0.4 compiled core. It covers all eight LORAM/HIRAM/CHAREN combinations, ROM/I/O selection, RAM-under-ROM writes, the official opcode table count, and synthetic KERNAL reset-vector execution.
 
-For a local regression, place a legal copy of `6502_functional_test.bin` in `tests/assets/` and run `npm test`. The external Vitest case automatically enables when the file exists.
+Result: **PASS**
 
-## Known Verification Boundary
+## CPU Regression Boundary
 
-v0.3 does not claim transistor-level or Lorenz/VICE CIA timing-suite compatibility. The implementation advances CIA state at individual PHI2 counts, but those counts are currently delivered after each complete CPU instruction. Consequently an interrupt that would arise halfway through a real 6510 instruction becomes visible at the next instruction boundary, which is correct for the current scheduler abstraction but not yet sufficient for all cycle-race tests.
+No files under `src/core/cpu/` were changed by v0.4. The CPU implementation therefore remains byte-for-byte the previously validated core that reached the Klaus NMOS 6502 functional-suite success trap `$3469` after 30,646,177 instructions.
 
-Timer-A-driven serial output waveform timing is also intentionally deferred. Serial input shifting is implemented and tested.
+The project does not redistribute the Klaus binary. For a local regression, place a legal copy of `6502_functional_test.bin` in `tests/assets/` and run `npm test`.
+
+## Known Timing Boundary
+
+v0.4 introduces a real one-system-cycle machine clock for VIC-II and both CIAs, but the CPU is still instruction-granular. `Cpu6510.step()` completes all reads/writes for an instruction before `C64Machine` replays the returned cycle count through the peripheral clock.
+
+Consequences:
+
+- raster counters and peripheral elapsed-cycle totals are deterministic;
+- raster IRQs become visible at instruction boundaries;
+- a CPU write to `$D020`, `$D011`, etc. is not yet positioned on its exact bus cycle;
+- VIC BA/AEC stalls cannot yet pause a CPU read mid-instruction;
+- bad-line, sprite-DMA, stable-raster, and border-opening timing are **not** claimed cycle-exact.
+
+This is the intended handoff point for the next phase: a resumable CPU bus-cycle/micro-operation execution model plus VIC bus arbitration.
+
+## Framebuffer Boundary
+
+The v0.4 framebuffer is a 384×272 logical presentation with a centered 320×200 standard text area and border. It is not a literal 504-dot PAL raster capture. Raster timing and framebuffer presentation are intentionally separated so later cycle/dot rendering can replace the presentation layer without redesigning the master scheduler.
+
+Only standard hires character mode is rendered in v0.4. Bitmap, multicolor, ECM, sprites, fine scrolling, and border tricks remain deferred.
 
 ## Recommended Local Commands
 

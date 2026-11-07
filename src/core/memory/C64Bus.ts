@@ -16,14 +16,14 @@ export interface C64MemoryConfiguration {
 /**
  * CPU-facing Commodore 64 bus for the stock no-cartridge memory configuration.
  *
- * The bus contains the 6510 processor port because $0000/$0001 are internal to
- * the CPU package and directly control the C64 PLA banking inputs. Cartridge
- * GAME/EXROM modes are intentionally deferred beyond v0.2.
+ * The bus also exposes the VIC's independent 14-bit memory view. VIC accesses
+ * bypass CPU ROM/I/O banking and apply CIA2 bank selection plus VIC-specific
+ * character-ROM shadowing.
  */
 export class C64Bus implements Bus {
   public readonly ram = new Uint8Array(0x10000);
   public readonly roms = new C64Roms();
-  public readonly io = new C64Io();
+  public readonly io: C64Io;
 
   private dataDirection = 0x2f;
   private dataLatch = 0x37;
@@ -32,6 +32,13 @@ export class C64Bus implements Bus {
   // inputs, matching the stock machine's pulled-up banking lines. Bit 4 is the
   // inactive Datasette switch sense. Undefined bits 6-7 stay low for now.
   private inputPins = 0x17;
+
+  constructor() {
+    this.io = new C64Io({
+      read: (address) => this.readVicMemory(address),
+      readColor: (index) => this.readVicColor(index)
+    });
+  }
 
   read(address: number): number {
     return this.readMapped(address, false);
@@ -64,6 +71,27 @@ export class C64Bus implements Bus {
     // remains underneath BASIC/KERNAL/CHAR ROM and receives writes whenever I/O
     // is not actively decoding the $D000-$DFFF range.
     this.ram[normalizedAddress] = byte;
+  }
+
+  /**
+   * Read one byte through the VIC-II's 14-bit address bus.
+   *
+   * The VIC never sees CPU I/O or BASIC/KERNAL ROM. Character ROM shadows
+   * relative $1000-$1FFF only in banks 0 and 2.
+   */
+  readVicMemory(address: number): number {
+    const vicAddress = address & 0x3fff;
+    const bank = this.vicBankNumber;
+
+    if ((bank === 0 || bank === 2) && vicAddress >= 0x1000 && vicAddress <= 0x1fff) {
+      return this.roms.character[vicAddress - 0x1000] ?? 0xff;
+    }
+
+    return this.ram[this.vicBankBase | vicAddress] ?? 0;
+  }
+
+  readVicColor(index: number): number {
+    return this.io.colorRam.memory[index & 0x03ff]! & 0x0f;
   }
 
   resetProcessorPort(): void {

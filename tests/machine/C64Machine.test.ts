@@ -105,3 +105,48 @@ describe('C64Machine CIA integration', () => {
     expect(machine.cpu.pc).toBe(0xe100);
   });
 });
+
+describe('C64Machine VIC-II timing integration', () => {
+  it('tracks every returned CPU cycle on the master clock and VIC raster', () => {
+    const machine = new C64Machine();
+    const kernal = kernalWithResetVector(0xe000);
+    machine.loadRom('kernal', kernal);
+
+    const resetCycles = machine.powerOn();
+    expect(resetCycles).toBe(7);
+    expect(machine.masterCycles).toBe(7);
+    expect(machine.bus.io.vic.rasterCycle).toBe(8);
+
+    const instructionCycles = machine.step();
+    expect(instructionCycles).toBe(2);
+    expect(machine.masterCycles).toBe(9);
+    expect(machine.bus.io.vic.rasterCycle).toBe(10);
+  });
+
+  it('delivers an enabled VIC raster interrupt through the 6510 IRQ line', () => {
+    const machine = new C64Machine();
+    const kernal = new Uint8Array(KERNAL_ROM_SIZE).fill(0xea);
+    kernal[0x0000] = 0x58; // $E000 CLI
+    kernal[0x1ffc] = 0x00;
+    kernal[0x1ffd] = 0xe0;
+    kernal[0x1ffe] = 0x00;
+    kernal[0x1fff] = 0xe2;
+    machine.loadRom('kernal', kernal);
+    machine.powerOn();
+
+    machine.step(); // CLI, total raster cycles now 9
+    machine.bus.io.vic.write(0x11, 0x00);
+    machine.bus.io.vic.write(0x12, 0x01);
+    machine.bus.io.vic.write(0x1a, 0x01);
+
+    for (let i = 0; i < 54; i += 1) {
+      machine.tickSystemCycle();
+    }
+
+    expect(machine.bus.io.vic.rasterLine).toBe(1);
+    expect(machine.bus.io.vic.irqAsserted).toBe(true);
+
+    machine.step();
+    expect(machine.cpu.pc).toBe(0xe200);
+  });
+});

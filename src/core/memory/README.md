@@ -2,29 +2,23 @@
 
 ## Overview
 
-This directory contains the byte-addressable bus abstractions used by the CPU. `RamBus` remains the simple 64 KiB test bus used for isolated CPU validation. `C64Bus` is the stock no-cartridge Commodore 64 memory system.
+This directory contains the byte-addressable bus abstractions used by the CPU and the C64's machine-specific memory rules. `RamBus` is the flat 64 KiB CPU-test bus. `C64Bus` owns physical RAM, CPU ROM/I/O banking, the 6510 processor port, and the independent memory view used by the VIC-II.
 
 ## Architecture
 
 ```text
-Cpu6510
-  |
-  v
-Bus
-├── RamBus     isolated CPU/unit tests
-└── C64Bus     C64 address decode
-    ├── RAM / ROM banking
-    ├── 6510 processor port
-    └── C64Io
+              C64Bus
+             /      \
+      CPU Bus view   VIC 14-bit view
+      /   |   \       /       \
+    RAM  ROM  I/O   banked RAM  Char ROM shadow
 ```
 
-`Bus.read()` may cause hardware side effects. `Bus.peek()` must be observational and is used by the disassembler/debugger. `Bus.write()` handles the machine-specific destination of a CPU write.
-
-`C64Bus` owns 64 KiB physical RAM, the 6510 `$0000/$0001` port, the three motherboard ROM images, and the `$D000-$DFFF` I/O router.
+The CPU view is controlled by `$0000/$0001` and the C64 PLA rules. The VIC view is controlled by CIA2 PA0/PA1 and never exposes CPU I/O, BASIC ROM, or KERNAL ROM.
 
 ## Implementation Discussion
 
-For the stock no-cartridge memory map:
+For the stock no-cartridge CPU memory map:
 
 - BASIC ROM is visible at `$A000-$BFFF` only when LORAM and HIRAM are high.
 - KERNAL ROM is visible at `$E000-$FFFF` when HIRAM is high.
@@ -34,12 +28,12 @@ For the stock no-cartridge memory map:
 
 Writes to visible BASIC/KERNAL/character ROM go to physical RAM underneath. When I/O is selected, writes go to the selected device instead.
 
-`$0000/$0001` are modeled as 6510 internal registers and never alter physical RAM locations zero and one. Effective bank control comes from resolved processor-port pins, so input-configured bits use external pin levels.
+### VIC memory view
 
-### CIA2 and the VIC bank
+`readVicMemory()` accepts the VIC's 14-bit address. CIA2 Port A bits 0-1 are inverted to select one of four physical 16 KiB banks. In banks 0 and 2, VIC-relative `$1000-$1FFF` reads the 4 KiB character ROM. In banks 1 and 3 the same relative addresses read physical RAM.
 
-v0.3 exposes `vicBankNumber` and `vicBankBase`. CIA2 Port A bits 0-1 supply the VIC's high address bits through inverters, so pin values `11`, `10`, `01`, `00` select banks 0, 1, 2, 3 respectively. If those CIA pins are configured as inputs after reset, pull-ups select bank 0.
+This shadowing is independent from CPU `$0001` banking. In particular, VIC bank 3 sees the RAM underneath CPU I/O/KERNAL regions rather than those devices/ROMs.
 
-This does not yet implement VIC memory fetches or character-ROM visibility from the VIC side; it establishes the real bank-control source for the upcoming VIC-II phase.
+Color RAM is separate from the VIC 14-bit byte bus. `readVicColor()` supplies its fixed 1 KiB low-nibble storage to the VIC renderer.
 
-Cartridge GAME/EXROM PLA modes, open-bus decay, and cycle-level VIC-II bus arbitration remain future work.
+Cartridge GAME/EXROM PLA modes, open-bus behavior, and cycle-level VIC arbitration remain future work.

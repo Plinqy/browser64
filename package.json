@@ -1,9 +1,9 @@
 {
   "name": "c64-browser-emulator",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "private": true,
   "type": "module",
-  "description": "A from-scratch Commodore 64 emulator for the browser with an NMOS 6510 core, stock C64 memory banking, and functional MOS 6526 CIA chips.",
+  "description": "A from-scratch Commodore 64 emulator for the browser with a 6510 core, C64 banking, MOS 6526 CIAs, and a timed VIC-II standard-text display foundation.",
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",

@@ -17,3 +17,16 @@ export type { C64RomKind } from './rom/RomSet';
 export { C64Machine } from './machine/C64Machine';
 export { Disassembler } from './debugger/Disassembler';
 export { TraceFormatter, formatFlags } from './debugger/TraceFormatter';
+export {
+  VicII,
+  VIC_ACTIVE_HEIGHT,
+  VIC_ACTIVE_WIDTH,
+  VIC_ACTIVE_X,
+  VIC_ACTIVE_Y,
+  VIC_FRAMEBUFFER_HEIGHT,
+  VIC_FRAMEBUFFER_WIDTH
+} from './vic/VicII';
+export type { VicMemory } from './vic/VicII';
+export { C64_PALETTE } from './vic/VicPalette';
+export { NTSC_6567R8_TIMING, PAL_6569_TIMING } from './vic/VicTiming';
+export type { VicTimingProfile, VicVideoStandard } from './vic/VicTiming';

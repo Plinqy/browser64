@@ -2,48 +2,47 @@
 
 A from-scratch Commodore 64 emulator written in TypeScript for modern web browsers.
 
-The project is built from hardware behavior upward rather than wrapping VICE or another emulator. Version 0.3 retains the validated NMOS 6502/6510 CPU and C64 memory-banking foundation and replaces both CIA placeholders with functional MOS 6526 implementations.
+The project is built from hardware behavior upward rather than wrapping VICE or another emulator. Version 0.4 adds a timed VIC-II foundation and a real standard-text framebuffer on top of the validated 6510, C64 memory map, and MOS 6526 CIA work from earlier phases.
 
-## v0.3 Status
+## v0.4 Status
 
 Implemented:
 
-- all v0.1 CPU/debugger functionality
+- all v0.1 6510 CPU/debugger functionality
 - all v0.2 C64 processor-port, ROM, RAM-under-ROM, and I/O banking functionality
-- two functional MOS 6526 CIA devices
-- CIA register mirroring at `$DC00-$DCFF` / `$DD00-$DDFF`
-- PRA/PRB and DDRA/DDRB pin resolution
-- Timer A and Timer B 16-bit latches/counters
-- continuous and one-shot timer modes
-- force-load control strobes
-- PHI2 and CNT timer inputs
-- Timer B counting Timer A underflows
-- PB6/PB7 timer pulse/toggle output behavior
-- ICR source latching, set/clear interrupt masks, read-to-acknowledge behavior
-- side-effect-free CIA debugger `peek()`
-- active-low FLAG edge interrupt
-- TOD clock with 50/60 Hz divider selection
-- TOD coherent read latch, stop/start write sequence, and alarm interrupt
-- SDR serial-input shifting on CNT edges
-- 8x8 C64 keyboard switch matrix
-- CIA1 keyboard and active-low joystick pin wiring
-- CIA2 PA0/PA1 inverted VIC 16 KiB bank selection
-- CIA1 IRQ wired to the 6510 IRQ input
-- CIA2 interrupt output converted to 6510 NMI edges
-- RESTORE-key hook through CIA2 FLAG
-- machine-level instruction/cycle advancement via `C64Machine.step()`
-- browser console CIA/VIC-bank status display
+- all v0.3 MOS 6526 CIA, keyboard-matrix, joystick-pin, IRQ/NMI, TOD, and VIC-bank functionality
+- real VIC-II CPU-visible register model replacing the old register-file placeholder
+- PAL MOS 6569 timing profile: 63 cycles/line × 312 lines/frame
+- NTSC MOS 6567R8 timing profile defined for future machine selection
+- one-system-cycle machine clock boundary
+- live VIC raster line/cycle/frame counters
+- 9-bit raster compare using `$D011/$D012`
+- raster IRQ status/mask/acknowledge behavior through `$D019/$D01A`
+- CIA2-selected VIC 16 KiB memory banks
+- VIC-specific character-ROM shadowing in banks 0 and 2
+- `$D018` screen-matrix and character-generator pointers
+- fixed color-RAM fetches
+- border/background colors from `$D020/$D021`
+- deterministic 40×25 standard-hires-text renderer
+- browser-independent 4-bit color-index framebuffer
+- Canvas display frontend
+- browser **Run Frame** control
+- VIC raster/IRQ/pointer debugger status
 
 Still intentionally deferred:
 
-- transistor/cycle-pipeline-specific 6526 quirks and Lorenz/VICE CIA compatibility edge cases
-- Timer-A-driven serial output waveform timing
-- IEC serial-bus electrical/device behavior
-- browser keyboard-to-matrix key mapping
-- real VIC-II video/raster/bus stealing
+- CPU micro-operation execution and exact placement of reads/writes inside instructions
+- VIC BA/AEC bus stealing and CPU stalls
+- bad lines and real c-access/g-access timing
+- sprites and sprite DMA
+- bitmap, multicolor, and extended-color modes
+- fine-scroll/border flip-flop tricks
+- light pen and collision registers
+- exact open-bus behavior
+- analog VIC color generation
 - SID audio
+- IEC/1541 emulation
 - cartridge GAME/EXROM modes
-- PRG/T64/D64 and 1541 drive emulation
 - undocumented NMOS CPU opcodes
 
 ## Requirements
@@ -60,13 +59,15 @@ npm run dev
 
 Open the local URL printed by Vite.
 
-The browser page asks you to supply three unheadered ROM images from your own C64 ROM set:
+Supply your own unheadered ROM images:
 
 - BASIC: exactly 8192 bytes
 - KERNAL: exactly 8192 bytes
 - character generator: exactly 4096 bytes
 
-The project does not redistribute Commodore ROM images. Once all three files are loaded, **Power On** reads the real reset vector at `$FFFC/$FFFD` through the mapped KERNAL ROM. Step/Run now use `C64Machine.step()`, so every executed CPU instruction advances both CIA chips by its emulated PHI2 cycle count.
+The project does not redistribute Commodore ROM images. Once all three files are loaded, **Power On** reads the real reset vector at `$FFFC/$FFFD` through the mapped KERNAL ROM.
+
+The VIC display is now visible in the browser. **Run Frame** executes whole CPU instructions until the VIC crosses into the next frame, then redraws the current standard-text state.
 
 ## Test
 
@@ -86,8 +87,6 @@ The external Klaus Dormann functional test remains optional. If you possess the 
 tests/assets/6502_functional_test.bin
 ```
 
-The Vitest test skips that external suite when the binary is absent.
-
 ## Core Documentation
 
 Every directory under `src/core/` contains its own `README.md` covering **Overview**, **Architecture**, and **Implementation Discussion**.
@@ -102,56 +101,60 @@ Current core documentation:
 - `src/core/io/README.md`
 - `src/core/machine/README.md`
 - `src/core/cia/README.md`
+- `src/core/vic/README.md`
 
 When a new core subsystem directory is added, its README is part of the same change.
 
-## CIA Architecture
+## v0.4 Architecture
 
 ```text
-                   +--------------------+
-                   |    C64Machine      |
-                   +---------+----------+
-                             |
-                    instruction cycles
-                             |
-              +--------------+--------------+
-              |                             |
-         +----v-----+                  +----v-----+
-         |  CIA #1  |                  |  CIA #2  |
-         |  $DCxx   |                  |  $DDxx   |
-         +----+-----+                  +----+-----+
-              |                             |
-       IRQ ---+----> 6510             NMI <-+--- IRQ assertion edge
-              |                             |
-     keyboard/joysticks              PA0/PA1 -> VIC bank
-                                            FLAG <- RESTORE
+Browser UI / Canvas
+        |
+        v
++-------------------+
+|    C64Machine     |
+| master cycle tick |
++---------+---------+
+          |
+   +------+------+----------------+
+   |             |                 |
++--v---+     +---v---+         +---v---+
+|6510  |     |VIC-II |         | CIAs  |
++--+---+     +---+---+         +---+---+
+   |             |                 |
+   +-------> C64Bus <--------------+
+                 |
+       +---------+----------+
+       |                    |
+ CPU memory view       VIC 14-bit view
+ RAM/ROM/I/O banking   CIA2 bank + char ROM shadow
 ```
 
-The 6526 chip model itself contains no C64-specific key names or VIC knowledge. `C64Io` owns motherboard wiring; `C64Machine` owns CPU interrupt wiring and time advancement.
+The CPU and VIC do **not** share one logical memory read path. That distinction matters on a real C64: the VIC cannot see CPU I/O or BASIC/KERNAL ROM, and the character ROM appears to the VIC in banks 0 and 2 independently of the 6510 `$0001` banking state.
 
 ## Timing Model
 
-v0.3 is a functional, deterministic CIA implementation but the emulator is still instruction-granular. `Cpu6510.step()` executes a complete instruction and returns its documented cycle count. `C64Machine.step()` then advances both CIAs by that many PHI2 cycles.
+`C64Machine.tickSystemCycle()` is now the master hardware clock boundary. One call advances the VIC-II and both CIAs by one C64 system cycle and then synchronizes interrupt lines.
 
-This gives correct proportional timer behavior and real CIA interrupt flow for KERNAL startup work. It does **not** yet model the precise intra-instruction bus cycle on which a CIA/VIC event occurs. The VIC-II phase will require a true master-cycle scheduler so BA/AEC bus arbitration and raster timing can occur between CPU micro-operations.
+`C64Machine.step()` still calls `Cpu6510.step()`, which executes an entire instruction atomically, and then replays the returned cycle count through `tickSystemCycle()`. Therefore raster/peripheral time is cycle-counted, but a CPU write is not yet positioned on its exact intra-instruction cycle.
+
+That is intentional. The next timing step is to evolve the 6510 executor into resumable micro-operations so VIC BA/AEC can pause CPU read cycles on bad lines and sprite DMA without replacing the machine/device architecture built here.
 
 ## Roadmap
 
-### v0.4 — VIC-II text display and master timing foundation
+### v0.5 — VIC-II bus arbitration and bad-line foundation
 
-- replace the VIC register placeholder with a real VIC-II register model
-- master PHI2/VIC cycle scheduler
-- raster counter and raster IRQ foundation
-- CIA2-selected VIC memory banks
-- VIC character-ROM visibility in banks 0 and 2
-- screen RAM / character generator / color RAM fetches
-- border and background colors
-- standard character-mode framebuffer
-- Canvas renderer
+- CPU micro-operation / bus-cycle execution boundary
+- BA/AEC/RDY-style CPU stalling
+- bad-line detection and 40 character/color c-accesses
+- line-buffered text fetches rather than whole-frame memory sampling
+- cycle-positioned VIC register writes
+- raster-accurate border/background changes
 
 ### Later
 
-- complete VIC-II graphics modes, badlines, sprites and cycle stealing
+- sprites and sprite DMA
+- complete VIC-II display modes
 - browser keyboard/joystick adapter
 - SID/audio worklet
 - PRG/T64/D64 media
@@ -162,7 +165,7 @@ This gives correct proportional timer behavior and real CIA interrupt flow for K
 ## Design Rules
 
 1. `src/core` never depends on browser APIs.
-2. CPU/device access crosses explicit bus/interface boundaries.
+2. CPU and VIC memory access use explicit, separate hardware views.
 3. Debug inspection never causes emulated hardware side effects.
 4. Emulated time advances explicitly; wall-clock time stays outside the core.
 5. Timing shortcuts are documented as shortcuts.
