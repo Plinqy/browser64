@@ -2,20 +2,20 @@
 
 ## Overview
 
-`src/core` contains the platform-independent emulator implementation. Code in this tree must not depend on browser APIs, DOM objects, Canvas, Web Audio, timers, or UI state. The core is deterministic and can run under a browser frontend, Node test harness, command-line debugger, or future host.
+`src/core` is the browser-independent Commodore 64 hardware model. It must not depend on DOM, Canvas, Web Audio, timers, or host wall-clock state.
 
-Version 0.4 contains:
+Version 0.5 contains:
 
-- `cpu/` — validated NMOS 6502 instruction engine forming the computational core of the MOS 6510.
-- `memory/` — generic bus contracts plus stock C64 CPU banking and the independent VIC memory view.
-- `rom/` — motherboard BASIC/KERNAL/character ROM ownership and validation.
-- `io/` — C64 `$D000-$DFFF` device routing, color RAM, SID placeholder, VIC and CIA composition.
-- `cia/` — functional MOS 6526 CIA chips and C64 keyboard switch matrix.
-- `vic/` — timed VIC-II register/raster/text-rendering foundation.
-- `machine/` — complete machine composition, one-cycle master clock, IRQ/NMI wiring.
-- `debugger/` — side-effect-free disassembly and execution trace formatting.
+- `cpu/` — cycle-steppable MOS 6510/NMOS 6502 engine for all 151 official opcodes.
+- `memory/` — CPU banking plus the VIC's independent memory view.
+- `rom/` — BASIC, KERNAL, and character ROM ownership/validation.
+- `io/` — `$D000-$DFFF` routing, color RAM, SID placeholder, and chip composition.
+- `cia/` — functional MOS 6526 CIAs and keyboard matrix.
+- `vic/` — raster/text core plus bad-line BA/AEC and c-access DMA foundation.
+- `machine/` — one-cycle master scheduler and interrupt/bus arbitration.
+- `debugger/` — side-effect-free disassembly and trace formatting.
 
-Every directory under `src/core` must contain a `README.md` describing its overview, architecture, and implementation decisions.
+Every directory under `src/core` contains a README describing overview, architecture, and implementation choices.
 
 ## Architecture
 
@@ -23,34 +23,37 @@ Every directory under `src/core` must contain a `README.md` describing its overv
 Host / browser
      |
      v
- C64Machine
-     |
-     +-- Cpu6510 ----> C64Bus CPU view
-     |
-     +-- master-cycle scheduler
-     |       +-- VIC-II ----> C64Bus VIC view
-     |       +-- CIA1
-     |       +-- CIA2
+ C64Machine  <--------- master system cycle --------+
+     |                                             |
+     +-- Cpu6510 -- read/write --> C64Bus CPU view |
+     |       ^                                     |
+     |       +---------- BA / AEC -----------------+-- VIC-II
+     |                                                |
+     +-- CIA1 / CIA2                                  +--> VIC memory view
      |
      +-- Debugger / trace
 ```
 
-The CPU knows only about `Bus`. The VIC has a separate 14-bit memory interface because its hardware view differs from the 6510's PLA-banked view. Hardware register reads may have side effects; debugger inspection uses `peek()` and must not acknowledge interrupts or alter latches.
+The CPU and VIC intentionally have different memory views. The VIC cannot see CPU BASIC/KERNAL/I/O banking and instead uses CIA2-selected 16 KiB banks plus its character-ROM shadow rules.
 
 ## Implementation Discussion
 
 ### Timing model
 
-The machine now has a true one-system-cycle peripheral boundary: `C64Machine.tickSystemCycle()` advances VIC and CIA state one cycle at a time.
+The machine no longer executes an instruction atomically and then replays its duration. CPU instructions are decomposed into bus-cycle micro-operations and interleaved with VIC/CIA time one C64 system cycle at a time.
 
-The 6510 itself remains instruction-granular. `Cpu6510.step()` performs its bus accesses atomically and returns a cycle total, after which `C64Machine.step()` advances the rest of the machine by that number of cycles. This means raster counters and timer totals are correct at the cycle-count level, while intra-instruction memory-access placement and VIC CPU stalls are not yet modeled.
-
-That limitation is deliberately isolated to the CPU execution boundary so the next phase can add resumable bus-cycle micro-operations without rewriting the VIC, CIA, bus, debugger, or browser frontend contracts.
+This allows VIC-II BA/RDY holds to stop CPU read cycles in the middle of an instruction. AEC then explicitly represents VIC ownership of the PHI2 bus. CPU cycle count and master system-cycle count can therefore diverge on bad lines.
 
 ### Determinism
 
-Core code does not call wall-clock or random APIs. TOD input is supplied explicitly, CPU/peripheral time advances explicitly, and browser scheduling remains outside `core/`.
+Core code has no wall-clock or random dependencies. Every clock edge is advanced explicitly. TOD input is injected explicitly. Browser scheduling remains entirely outside the core.
 
 ### Testing philosophy
 
-Correctness is validated bottom-up: CPU/bus primitives, C64 banking, chip-local behavior, address decode, VIC memory visibility/rendering, and finally machine-level interrupt/timing integration. External compatibility suites are additive; they do not replace focused tests that identify exactly which contract failed.
+Timing changes are tested at three levels:
+
+1. CPU micro-cycle behavior and instruction compatibility,
+2. VIC-local BA/AEC/bad-line/c-access behavior,
+3. machine-level CPU stalls and shared-clock integration.
+
+The instruction-granular `Cpu6510.step()` API remains available so the existing opcode and external functional-test coverage can continue to validate architectural CPU behavior independently of the C64 scheduler.

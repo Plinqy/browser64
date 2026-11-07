@@ -9,7 +9,7 @@ import { RegisterFileDevice } from './RegisterFileDevice';
 /**
  * Routes CPU accesses inside the C64's $D000-$DFFF I/O window.
  *
- * v0.4 replaces the VIC-II register placeholder with a timed VIC device while
+ * v0.5 uses the timed/arbitrating VIC-II device while
  * SID remains an explicit register-file placeholder until its later phase.
  */
 export class C64Io implements MemoryMappedDevice {

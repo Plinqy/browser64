@@ -2,51 +2,75 @@
 
 ## Overview
 
-This directory contains the MOS VIC-II video-chip foundation introduced in v0.4. The implementation now owns the C64 raster clock, the CPU-visible VIC register file needed for text display and raster interrupts, VIC-side memory fetches, and a browser-independent color-index framebuffer.
+This directory contains the MOS VIC-II video core. It owns raster timing, CPU-visible VIC registers, raster IRQs, the independent 14-bit VIC memory view, standard-text rendering, and—beginning in v0.5—the first real VIC/6510 bus-arbitration behavior.
 
-The default timing model is the PAL MOS 6569: 63 system cycles per raster line, 312 lines per frame, and 19,656 system cycles per frame. An NTSC 6567R8 timing profile is defined as well so machine scheduling is not architecturally hardcoded to PAL.
+The default machine profile is PAL MOS 6569: 63 system cycles per raster line and 312 lines per frame. NTSC timing metadata remains available for later selectable-machine support.
 
 ## Architecture
 
-`VicII` is a memory-mapped device but it does **not** read memory through the 6510 CPU bus. Instead it receives the narrow `VicMemory` interface:
+`VicII` is a memory-mapped device but does not use the 6510's CPU memory map. It receives a narrow `VicMemory` interface:
 
-- `read(address)` reads a byte from the VIC's current 16 KiB address space.
-- `readColor(index)` reads one color-RAM nibble for a video-matrix cell.
+- `read(address)` reads the current VIC 16 KiB bank.
+- `readColor(index)` reads one 4-bit color-RAM cell.
 
-`C64Bus` implements that view. It applies the inverted CIA2 bank selection and the VIC-specific character-ROM shadowing rules independently of the CPU's `$0001` memory banking.
+`C64Bus` supplies that view using inverted CIA2 bank selection and VIC-specific character-ROM shadowing.
 
-Raster time is represented by:
+The VIC additionally exposes its current bus signals:
 
-- `rasterLine` — 0 through 311 on PAL.
-- `rasterCycle` — 1 through 63 on PAL.
-- `frameNumber` — increments when the raster wraps to line 0.
+```text
+bad-line condition
+       |
+       +--> BA low, cycles 12-54
+       |
+       +--> AEC low, cycles 15-54
+                       |
+                       +--> 40 c-accesses
+```
 
-The VIC framebuffer contains 4-bit C64 color **indices**, not RGB pixels. This keeps analog/display palette decisions outside the hardware model. `VicPalette.ts` is a frontend presentation palette, while the emulated chip itself only knows color numbers 0–15.
+## Implementation Discussion
 
-## Implementation discussion
+### Raster and IRQ registers
 
-v0.4 implements the pieces required to get a recognizable stock C64 text display without pretending the emulator is already cycle-exact:
+The v0.4 register behavior remains intact:
 
-- `$D011` supplies display/mode control on write and the live raster high bit on read. Its written bit 7 becomes the high bit of the raster IRQ compare value.
-- `$D012` supplies the live raster low byte on read and the low raster IRQ compare byte on write.
-- `$D018` selects the screen matrix in 1 KiB steps and the text character base in 2 KiB steps.
-- `$D019` exposes VIC interrupt latches and uses write-one-to-clear acknowledgement.
-- `$D01A` masks interrupt sources.
-- `$D020`/`$D021` drive border/background color.
-- VIC registers mirror every `$40` bytes through CPU addresses `$D000-$D3FF` via `C64Io`.
+- `$D011` supplies display/mode/YSCROLL state on write and the live raster high bit on read.
+- `$D012` sets raster compare on write and returns the live raster low byte on read.
+- `$D018` selects screen and character memory offsets.
+- `$D019` is the interrupt latch with write-one-to-clear acknowledgement.
+- `$D01A` masks VIC interrupt sources.
+- `$D020/$D021` provide border/background colors.
 
-The renderer currently supports standard 40×25, 8×8, hires character text. It fetches the 1,000 screen codes, the corresponding color-RAM nibbles, and glyph bytes through the VIC memory interface. Bitmap, multicolor, ECM, sprites, light pen, sprite collisions, fine-scroll border behavior, and analog color generation remain future phases.
+### Bad-line condition
 
-### Timing boundary
+A raster line is treated as a bad line when:
 
-`C64Machine.tickSystemCycle()` is now the master hardware-clock boundary. Every system cycle advances VIC and both CIA chips before interrupt lines are synchronized. `C64Machine.step()` still asks the 6510 core to execute an entire instruction atomically and then advances the rest of the machine by the returned cycle count.
+1. the raster is `$30-$F7`,
+2. `(raster & 7) == YSCROLL`, and
+3. DEN was observed set at some point during raster `$30`.
 
-That means raster counters and peripheral time are now tracked one cycle at a time, but CPU memory accesses are **not yet placed on their individual bus cycles**. A `STA $D020`, for example, changes the VIC register before the instruction's returned cycles are replayed. This is intentionally documented rather than hidden. True BA/AEC stalls, bad lines, sprite DMA, and cycle-positioned raster writes require the future micro-operation CPU execution model.
+The DEN observation is latched for the display window and cleared at the next frame.
 
-### Character ROM visibility
+### BA and AEC
 
-The VIC has only 14 address lines. CIA2 supplies the inverted upper two bank bits. In VIC banks 0 and 2, VIC-relative `$1000-$1FFF` is replaced by the 4 KiB character ROM. In banks 1 and 3 the same relative range is ordinary RAM. This rule is independent of whether the 6510 currently sees I/O, RAM, or character ROM at CPU `$D000-$DFFF`.
+On a bad line the VIC drives BA low beginning at cycle 12. This gives the 6510 up to three cycles to finish a possible run of write cycles. AEC goes low on cycle 15 and remains low through cycle 54 while VIC owns the PHI2 bus. Both are released for cycle 55.
 
-### Framebuffer crop
+A read-heavy instruction stream therefore stops as early as cycle 12 and can lose 43 CPU cycles, while a stream already in consecutive write cycles can consume some or all of the three warning cycles before AEC falls.
 
-The v0.4 framebuffer is a practical 384×272 logical presentation containing a centered 320×200 text area and border. It is intentionally not a literal 504-dot PAL raster capture. Raster timing is modeled separately at the hardware-cycle level so a later renderer can move to dot/cycle-positioned output without changing the scheduler contract.
+### c-accesses
+
+During AEC-low cycles 15-54 the VIC performs 40 character/color matrix fetches. v0.5 stores those values in internal 40×25 line buffers (`videoMatrix` and `colorMatrix`) and exposes side-effect-free debug accessors for tests.
+
+The existing standard-text renderer still renders a frame snapshot from the VIC memory interface. Converting g-access/pixel output to consume the time-latched matrix data is intentionally left to the next video-timing refinement rather than mixing two timing changes in one phase.
+
+### Remaining VIC timing work
+
+Not yet implemented:
+
+- sprite DMA and sprite BA/AEC steals,
+- g-access cycle placement,
+- row counter/VC/VCBASE behavior,
+- cycle/dot-positioned border transitions,
+- fine scrolling,
+- bitmap/multicolor/ECM modes,
+- collision/light-pen behavior,
+- open-bus details.

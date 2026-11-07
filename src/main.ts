@@ -25,7 +25,7 @@ app.innerHTML = `
     <header>
       <p class="eyebrow">FROM-SCRATCH C64 EMULATOR</p>
       <h1>Commodore 64 Development Console</h1>
-      <p>v0.4 — 6510, MOS 6526 CIAs, timed VIC-II raster foundation, and standard text output.</p>
+      <p>v0.5 — cycle-steppable 6510, MOS 6526 CIAs, VIC-II text output, and bad-line BA/AEC arbitration.</p>
     </header>
 
     <article class="panel rom-panel">
@@ -238,7 +238,8 @@ function render(): void {
         `SP   $${hex(cpu.sp, 2)}`,
         `P    %${cpu.status.toString(2).padStart(8, '0')}`,
         `CPU CYC  ${cpu.cycles}`,
-        `SYS CYC  ${machine.masterCycles}`
+        `SYS CYC  ${machine.masterCycles}`,
+        `STALLS   ${machine.cpuStallCycles}`
       ].join('\n')
     : 'Load all three ROMs, then Power On.';
 
@@ -267,6 +268,10 @@ function render(): void {
     `RASTER        ${vic.rasterLine}:${vic.rasterCycle}`,
     `RASTER CMP    $${hex(vic.rasterCompare, 3)}`,
     `VIC IRQ       ${vic.irqAsserted ? 'ASSERTED' : 'clear'}`,
+    `BAD LINE      ${vic.badLine ? 'YES' : 'no'}`,
+    `BA            ${vic.baHigh ? 'HIGH' : 'LOW'}`,
+    `AEC           ${vic.aecHigh ? 'HIGH' : 'LOW'}`,
+    `C-ACCESSES    ${vic.cAccessesThisFrame}`,
     `FRAME         ${vic.frameNumber}`,
     `SCREEN        +$${hex(vic.screenMemoryOffset, 4)}`,
     `CHARS         +$${hex(vic.characterMemoryOffset, 4)}`

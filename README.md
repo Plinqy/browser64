@@ -1,49 +1,96 @@
 # C64 Browser Emulator
 
-A from-scratch Commodore 64 emulator written in TypeScript for modern web browsers.
+A from-scratch Commodore 64 emulator written in TypeScript for the browser.
 
-The project is built from hardware behavior upward rather than wrapping VICE or another emulator. Version 0.4 adds a timed VIC-II foundation and a real standard-text framebuffer on top of the validated 6510, C64 memory map, and MOS 6526 CIA work from earlier phases.
+Version **0.5.0** adds cycle-steppable 6510 execution and the first real VIC-II/CPU bus arbitration: PAL bad-line detection, BA/RDY holds, AEC bus ownership, and 40 character/color c-accesses.
 
-## v0.4 Status
+## Current Capabilities
 
-Implemented:
+### MOS 6510 / NMOS 6502
 
-- all v0.1 6510 CPU/debugger functionality
-- all v0.2 C64 processor-port, ROM, RAM-under-ROM, and I/O banking functionality
-- all v0.3 MOS 6526 CIA, keyboard-matrix, joystick-pin, IRQ/NMI, TOD, and VIC-bank functionality
-- real VIC-II CPU-visible register model replacing the old register-file placeholder
-- PAL MOS 6569 timing profile: 63 cycles/line × 312 lines/frame
-- NTSC MOS 6567R8 timing profile defined for future machine selection
-- one-system-cycle machine clock boundary
-- live VIC raster line/cycle/frame counters
-- 9-bit raster compare using `$D011/$D012`
-- raster IRQ status/mask/acknowledge behavior through `$D019/$D01A`
-- CIA2-selected VIC 16 KiB memory banks
-- VIC-specific character-ROM shadowing in banks 0 and 2
-- `$D018` screen-matrix and character-generator pointers
-- fixed color-RAM fetches
-- border/background colors from `$D020/$D021`
-- deterministic 40×25 standard-hires-text renderer
-- browser-independent 4-bit color-index framebuffer
-- Canvas display frontend
-- browser **Run Frame** control
-- VIC raster/IRQ/pointer debugger status
+- all 151 documented NMOS 6502 opcodes
+- all documented addressing modes
+- binary and NMOS decimal ADC/SBC
+- stack, BRK, IRQ, NMI, RTI, JSR/RTS
+- documented instruction cycle counts and page-cross penalties
+- NMOS `JMP ($xxFF)` wrap behavior
+- read-modify-write old-value dummy writes
+- explicit read/write bus-cycle micro-operations
+- RDY stalls on read cycles
+- write cycles can complete while RDY is low
+- AEC can disconnect the CPU from the bus
+- instruction-level `step()` retained for compatibility tests
 
-Still intentionally deferred:
+### C64 Memory and ROMs
 
-- CPU micro-operation execution and exact placement of reads/writes inside instructions
-- VIC BA/AEC bus stealing and CPU stalls
-- bad lines and real c-access/g-access timing
-- sprites and sprite DMA
-- bitmap, multicolor, and extended-color modes
-- fine-scroll/border flip-flop tricks
-- light pen and collision registers
-- exact open-bus behavior
-- analog VIC color generation
-- SID audio
-- IEC/1541 emulation
-- cartridge GAME/EXROM modes
-- undocumented NMOS CPU opcodes
+- 64 KiB physical RAM
+- real 6510 `$0000/$0001` processor port
+- all LORAM/HIRAM/CHAREN banking combinations
+- BASIC/KERNAL/character ROM mapping
+- RAM underneath ROM
+- independent VIC 14-bit memory view
+- CIA2-selected VIC banks
+- VIC character-ROM shadowing in banks 0 and 2
+
+### MOS 6526 CIA
+
+- port and DDR behavior
+- timers A/B
+- Timer-B cascading
+- interrupt control/mask logic
+- FLAG/CNT behavior
+- TOD clock/alarm foundation
+- serial input shifting
+- keyboard matrix and joystick hooks
+- CIA2 VIC-bank output
+- CIA1 IRQ and CIA2 NMI integration
+
+### VIC-II
+
+- PAL MOS 6569 timing: 63 cycles/line × 312 lines/frame
+- NTSC 6567R8 timing profile metadata
+- raster line/cycle/frame counters
+- 9-bit raster IRQ compare
+- `$D019/$D01A` IRQ latch/mask behavior
+- `$D018` screen/character pointers
+- border/background colors
+- standard 40×25 hires text framebuffer
+- Canvas frontend
+- bad-line condition using raster/YSCROLL/DEN
+- BA low on bad-line cycles 12–54
+- AEC low on cycles 15–54
+- 40 character/color c-accesses per bad line
+- latched video/color matrix data for timing tests
+
+### Master Timing
+
+`C64Machine.tickSystemCycle()` is now the actual execution boundary. Every call:
+
+1. samples VIC BA/AEC,
+2. attempts one 6510 bus cycle,
+3. advances VIC and both CIAs once,
+4. advances the master clock,
+5. resynchronizes interrupt lines.
+
+On a normal line, CPU cycles and master cycles advance together. During a bad line, the VIC can stun the CPU while the master clock, raster, and CIA timers continue.
+
+A read-only instruction stream can lose 43 CPU cycles on a PAL bad line because BA drops at cycle 12; the 40 VIC c-accesses themselves occupy cycles 15–54. A CPU already executing writes may use some of the three BA-warning cycles before AEC falls.
+
+## Still Intentionally Deferred
+
+- sprite DMA and sprite BA/AEC steals
+- exact g-access timing and row-counter/VC behavior
+- line-buffer-driven pixel generation
+- bitmap, multicolor, ECM, and fine scrolling
+- cycle/dot-positioned border tricks
+- light pen and sprite collisions
+- SID synthesis/audio
+- browser keyboard/joystick adapter
+- IEC bus and 1541
+- PRG/T64/D64 loading
+- cartridges/GAME/EXROM
+- undocumented NMOS opcodes
+- reset-pin micro-sequencing
 
 ## Requirements
 
@@ -57,22 +104,24 @@ npm install
 npm run dev
 ```
 
-Open the local URL printed by Vite.
+Supply your own unheadered ROM images in the browser:
 
-Supply your own unheadered ROM images:
+- BASIC: 8192 bytes
+- KERNAL: 8192 bytes
+- character generator: 4096 bytes
 
-- BASIC: exactly 8192 bytes
-- KERNAL: exactly 8192 bytes
-- character generator: exactly 4096 bytes
+No Commodore ROM images are included in this repository.
 
-The project does not redistribute Commodore ROM images. Once all three files are loaded, **Power On** reads the real reset vector at `$FFFC/$FFFD` through the mapped KERNAL ROM.
+## Build
 
-The VIC display is now visible in the browser. **Run Frame** executes whole CPU instructions until the VIC crosses into the next frame, then redraws the current standard-text state.
+```bash
+npm run build
+```
 
 ## Test
 
 ```bash
-npm test
+npm run test
 ```
 
 Optional watch mode:
@@ -81,15 +130,46 @@ Optional watch mode:
 npm run test:watch
 ```
 
-The external Klaus Dormann functional test remains optional. If you possess the 64 KiB `6502_functional_test.bin`, place it at:
+The Klaus Dormann functional test remains optional. If you possess the 64 KiB `6502_functional_test.bin`, place it at:
 
 ```text
 tests/assets/6502_functional_test.bin
 ```
 
-## Core Documentation
+## v0.5 Architecture
 
-Every directory under `src/core/` contains its own `README.md` covering **Overview**, **Architecture**, and **Implementation Discussion**.
+```text
+Browser UI / Canvas
+        |
+        v
++------------------------+
+|       C64Machine       |
+| one system-cycle clock |
++-----------+------------+
+            |
+       sample BA/AEC
+            |
+   +--------+---------+
+   |                  |
++--v---------+    +---v----+
+| Cpu6510    |    | VIC-II |
+| micro-ops  |<---| BA/AEC |
++--+---------+    +---+----+
+   |                  |
+   +------ C64Bus ----+
+              |
+        +-----+-----+
+        |           |
+      CIA1         CIA2
+```
+
+## Documentation Rule
+
+Every directory under `src/core/` contains its own `README.md` with:
+
+- Overview
+- Architecture
+- Implementation Discussion
 
 Current core documentation:
 
@@ -103,72 +183,34 @@ Current core documentation:
 - `src/core/cia/README.md`
 - `src/core/vic/README.md`
 
-When a new core subsystem directory is added, its README is part of the same change.
-
-## v0.4 Architecture
-
-```text
-Browser UI / Canvas
-        |
-        v
-+-------------------+
-|    C64Machine     |
-| master cycle tick |
-+---------+---------+
-          |
-   +------+------+----------------+
-   |             |                 |
-+--v---+     +---v---+         +---v---+
-|6510  |     |VIC-II |         | CIAs  |
-+--+---+     +---+---+         +---+---+
-   |             |                 |
-   +-------> C64Bus <--------------+
-                 |
-       +---------+----------+
-       |                    |
- CPU memory view       VIC 14-bit view
- RAM/ROM/I/O banking   CIA2 bank + char ROM shadow
-```
-
-The CPU and VIC do **not** share one logical memory read path. That distinction matters on a real C64: the VIC cannot see CPU I/O or BASIC/KERNAL ROM, and the character ROM appears to the VIC in banks 0 and 2 independently of the 6510 `$0001` banking state.
-
-## Timing Model
-
-`C64Machine.tickSystemCycle()` is now the master hardware clock boundary. One call advances the VIC-II and both CIAs by one C64 system cycle and then synchronizes interrupt lines.
-
-`C64Machine.step()` still calls `Cpu6510.step()`, which executes an entire instruction atomically, and then replays the returned cycle count through `tickSystemCycle()`. Therefore raster/peripheral time is cycle-counted, but a CPU write is not yet positioned on its exact intra-instruction cycle.
-
-That is intentional. The next timing step is to evolve the 6510 executor into resumable micro-operations so VIC BA/AEC can pause CPU read cycles on bad lines and sprite DMA without replacing the machine/device architecture built here.
-
 ## Roadmap
 
-### v0.5 — VIC-II bus arbitration and bad-line foundation
+### v0.6 — VIC-II fetch/render timing refinement
 
-- CPU micro-operation / bus-cycle execution boundary
-- BA/AEC/RDY-style CPU stalling
-- bad-line detection and 40 character/color c-accesses
-- line-buffered text fetches rather than whole-frame memory sampling
-- cycle-positioned VIC register writes
-- raster-accurate border/background changes
+- row counter / VC / VCBASE state
+- g-access timing
+- consume bad-line-latched matrix/color data during display
+- cycle-positioned border/background writes
+- fine-scroll foundation
 
 ### Later
 
-- sprites and sprite DMA
+- sprite DMA and sprites
 - complete VIC-II display modes
-- browser keyboard/joystick adapter
 - SID/audio worklet
-- PRG/T64/D64 media
-- IEC bus and 1541 emulation
-- cartridge/expansion support
-- undocumented CPU opcodes and deep compatibility suites
+- input adapters
+- media loading
+- 1541/IEC
+- cartridges
+- undocumented CPU opcodes and deeper compatibility suites
 
 ## Design Rules
 
 1. `src/core` never depends on browser APIs.
-2. CPU and VIC memory access use explicit, separate hardware views.
-3. Debug inspection never causes emulated hardware side effects.
+2. CPU and VIC memory views remain explicit and separate.
+3. Debug inspection never causes hardware side effects.
 4. Emulated time advances explicitly; wall-clock time stays outside the core.
 5. Timing shortcuts are documented as shortcuts.
-6. Temporary chip placeholders are labeled as placeholders, not fake compatibility.
+6. Temporary placeholders are labeled as placeholders.
 7. Unknown hardware behavior fails visibly rather than being silently invented.
 8. Optimize only after correctness tests and profiling identify a hot path.

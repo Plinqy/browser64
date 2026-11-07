@@ -119,10 +119,12 @@ describe('C64Bus stock no-cartridge banking', () => {
 
   it('routes debugger peeks through the same visible bank without changing storage', () => {
     const bus = busWithRoms();
-    bus.write(0xd012, 0x77);
+    bus.writePhysicalRam(0xd020, 0x44);
+    bus.write(0xd020, 0x07);
 
-    expect(bus.peek(0xd012)).toBe(0x77);
-    expect(bus.read(0xd012)).toBe(0x77);
+    expect(bus.peek(0xd020)).toBe(0x07);
+    expect(bus.read(0xd020)).toBe(0x07);
+    expect(bus.readPhysicalRam(0xd020)).toBe(0x44);
   });
 });
 

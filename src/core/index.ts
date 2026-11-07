@@ -1,4 +1,5 @@
 export { Cpu6510, UnsupportedOpcodeError } from './cpu/Cpu6510';
+export type { CpuClockResult, CpuCycleKind } from './cpu/Cpu6510';
 export { Flag } from './cpu/Flags';
 export { OFFICIAL_OPCODE_COUNT, OPCODES, getOpcodeInfo } from './cpu/opcodes';
 export type { AddressingMode, CpuSnapshot, Mnemonic, OpcodeInfo } from './cpu/types';
@@ -15,6 +16,7 @@ export { RegisterFileDevice } from './io/RegisterFileDevice';
 export { C64Roms, BASIC_ROM_SIZE, KERNAL_ROM_SIZE, CHARACTER_ROM_SIZE } from './rom/RomSet';
 export type { C64RomKind } from './rom/RomSet';
 export { C64Machine } from './machine/C64Machine';
+export type { C64SystemCycleResult } from './machine/C64Machine';
 export { Disassembler } from './debugger/Disassembler';
 export { TraceFormatter, formatFlags } from './debugger/TraceFormatter';
 export {

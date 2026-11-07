@@ -24,15 +24,19 @@ export const VIC_ACTIVE_Y = (VIC_FRAMEBUFFER_HEIGHT - VIC_ACTIVE_HEIGHT) / 2;
 const REGISTER_MASK = 0x3f;
 const LAST_IMPLEMENTED_REGISTER = 0x2e;
 const IRQ_RASTER = 0x01;
+const BADLINE_FIRST_RASTER = 0x30;
+const BADLINE_LAST_RASTER = 0xf7;
+const BADLINE_BA_FIRST_CYCLE = 12;
+const BADLINE_AEC_FIRST_CYCLE = 15;
+const BADLINE_LAST_DMA_CYCLE = 54;
 
 /**
  * MOS VIC-II foundation.
  *
- * v0.4 implements the CPU-visible register behavior required for normal text
- * display and raster interrupts, PAL/NTSC raster counters, and a deterministic
- * 40x25 standard-text framebuffer. Sprite DMA, bad-line bus arbitration,
- * multicolor/bitmap modes, open-bus behavior, and cycle-positioned pixels are
- * deliberately deferred.
+ * v0.5 adds the first real CPU/VIC bus-arbitration behavior on top of the text
+ * and raster foundation: bad-line detection, BA lead time, AEC ownership, and
+ * 40 cycle c-access DMA. Sprite DMA, multicolor/bitmap modes, open-bus behavior,
+ * and dot-positioned pixels remain future work.
  */
 export class VicII implements MemoryMappedDevice {
   public readonly framebuffer = new Uint8Array(VIC_FRAMEBUFFER_WIDTH * VIC_FRAMEBUFFER_HEIGHT);
@@ -44,6 +48,10 @@ export class VicII implements MemoryMappedDevice {
   private interruptStatus = 0;
   private interruptMask = 0;
   private frameCounter = 0;
+  private badLineEnableLatch = false;
+  private cAccessCounter = 0;
+  private readonly videoMatrix = new Uint8Array(1000);
+  private readonly colorMatrix = new Uint8Array(1000);
 
   constructor(
     private readonly memory: VicMemory = OPEN_VIC_MEMORY,
@@ -102,6 +110,10 @@ export class VicII implements MemoryMappedDevice {
     this.interruptStatus = 0;
     this.interruptMask = 0;
     this.frameCounter = 0;
+    this.badLineEnableLatch = false;
+    this.cAccessCounter = 0;
+    this.videoMatrix.fill(0);
+    this.colorMatrix.fill(0);
     this.framebuffer.fill(0);
   }
 
@@ -131,7 +143,7 @@ export class VicII implements MemoryMappedDevice {
       backgroundColor
     );
 
-    // v0.4 deliberately renders only the normal hires text mode. Keeping the
+    // The renderer still deliberately supports only the normal hires text mode. Keeping the
     // unsupported mode result deterministic is more useful than approximating
     // bitmap, ECM, or multicolor behavior incorrectly.
     if (!this.standardTextMode) {
@@ -191,6 +203,50 @@ export class VicII implements MemoryMappedDevice {
     return this.timing.cyclesPerLine * this.timing.linesPerFrame;
   }
 
+  /** Low three bits of $D011. */
+  get yScroll(): number {
+    return this.registers[0x11]! & 0x07;
+  }
+
+  /**
+   * A bad line performs 40 c-accesses for the next character row. DEN must have
+   * been observed during raster $30 and the raster low three bits must match
+   * YSCROLL.
+   */
+  get badLine(): boolean {
+    return this.badLineEnableLatch
+      && this.rasterLineValue >= BADLINE_FIRST_RASTER
+      && this.rasterLineValue <= BADLINE_LAST_RASTER
+      && (this.rasterLineValue & 0x07) === this.yScroll;
+  }
+
+  /** VIC BA output: low three cycles before bad-line DMA starts. */
+  get baHigh(): boolean {
+    if (!this.badLine) return true;
+    const cycle = this.rasterCycle;
+    return cycle < BADLINE_BA_FIRST_CYCLE || cycle > BADLINE_LAST_DMA_CYCLE;
+  }
+
+  /** VIC AEC output: low while the VIC owns PHI2 for c-access DMA. */
+  get aecHigh(): boolean {
+    if (!this.badLine) return true;
+    const cycle = this.rasterCycle;
+    return cycle < BADLINE_AEC_FIRST_CYCLE || cycle > BADLINE_LAST_DMA_CYCLE;
+  }
+
+  /** Number of bad-line c-accesses completed in the current frame. */
+  get cAccessesThisFrame(): number {
+    return this.cAccessCounter;
+  }
+
+  readLatchedVideoMatrix(index: number): number {
+    return this.videoMatrix[index % 1000] ?? 0;
+  }
+
+  readLatchedColorMatrix(index: number): number {
+    return this.colorMatrix[index % 1000] ?? 0;
+  }
+
   get displayEnabled(): boolean {
     return (this.registers[0x11]! & 0x10) !== 0;
   }
@@ -240,6 +296,16 @@ export class VicII implements MemoryMappedDevice {
   }
 
   private tickOneCycle(): void {
+    // DEN is sampled over raster $30. Once observed, bad-line generation stays
+    // enabled through the display window for the rest of the frame.
+    if (this.rasterLineValue === BADLINE_FIRST_RASTER && this.displayEnabled) {
+      this.badLineEnableLatch = true;
+    }
+
+    if (!this.aecHigh) {
+      this.performBadLineCAccess();
+    }
+
     this.cycleInLineValue += 1;
 
     if (this.cycleInLineValue < this.timing.cyclesPerLine) {
@@ -252,10 +318,30 @@ export class VicII implements MemoryMappedDevice {
     if (this.rasterLineValue >= this.timing.linesPerFrame) {
       this.rasterLineValue = 0;
       this.frameCounter += 1;
+      this.badLineEnableLatch = false;
+      this.cAccessCounter = 0;
       this.renderFrame();
     }
 
     this.latchRasterInterruptIfMatched();
+  }
+
+  private performBadLineCAccess(): void {
+    const column = this.rasterCycle - BADLINE_AEC_FIRST_CYCLE;
+    if (column < 0 || column >= 40) {
+      return;
+    }
+
+    const firstBadLine = BADLINE_FIRST_RASTER + this.yScroll;
+    const row = Math.trunc((this.rasterLineValue - firstBadLine) / 8);
+    if (row < 0 || row >= 25) {
+      return;
+    }
+
+    const cell = row * 40 + column;
+    this.videoMatrix[cell] = this.memory.read(this.screenMemoryOffset + cell) & 0xff;
+    this.colorMatrix[cell] = this.memory.readColor(cell) & 0x0f;
+    this.cAccessCounter += 1;
   }
 
   private latchRasterInterruptIfMatched(): void {

@@ -2,13 +2,33 @@ import type { Bus } from '../memory/Bus';
 import { word } from '../memory/Bus';
 import { Flag } from './Flags';
 import { getOpcodeInfo } from './opcodes';
-import type { AddressingMode, CpuSnapshot, OpcodeInfo } from './types';
+import type { AddressingMode, CpuSnapshot, Mnemonic, OpcodeInfo } from './types';
 
-interface ResolvedOperand {
-  address?: number;
-  value?: number;
-  relativeOffset?: number;
-  pageCrossed: boolean;
+export type CpuCycleKind = 'read' | 'write';
+
+export interface CpuClockResult {
+  /** True when the current CPU micro-cycle actually advanced. */
+  advanced: boolean;
+  /** True when RDY held a read cycle and no CPU state changed. */
+  stalled: boolean;
+  /** Bus direction of the cycle the CPU attempted. */
+  kind: CpuCycleKind;
+  /** True when this cycle completed an instruction or interrupt sequence. */
+  instructionCompleted: boolean;
+}
+
+interface CpuMicroOperation {
+  kind: CpuCycleKind;
+  run(): void;
+}
+
+interface AddressLatch {
+  lo: number;
+  hi: number;
+  base: number;
+  address: number;
+  pointer: number;
+  value: number;
 }
 
 export class UnsupportedOpcodeError extends Error {
@@ -19,15 +39,18 @@ export class UnsupportedOpcodeError extends Error {
 }
 
 /**
- * NMOS 6502 execution core used as the computational heart of the MOS 6510.
+ * Cycle-steppable NMOS 6502 execution core used as the computational heart of
+ * the MOS 6510.
  *
- * The C64-specific 6510 I/O port and memory banking belong to the machine bus,
- * not to the instruction decoder. This keeps the CPU reusable in isolated CPU
- * tests while allowing the later C64 bus to implement $0000/$0001 correctly.
+ * v0.5 schedules every documented instruction as explicit read/write bus
+ * micro-operations. clock() advances exactly one CPU bus cycle and can hold a
+ * read cycle when RDY is low. This is the behavior the C64 needs when VIC-II
+ * pulls BA low before taking AEC during bad-line DMA. Write cycles are never
+ * held by RDY, matching NMOS 6502/6510 behavior.
  *
- * v0.1 executes one complete instruction per step(). It accounts for official
- * instruction cycle totals, indexed page-cross penalties, and branch penalties,
- * but does not yet expose each individual bus cycle as a micro-operation.
+ * step() remains as a compatibility convenience: it clocks with RDY high until
+ * one instruction or interrupt sequence completes, preserving the public API
+ * used by the existing CPU functional tests.
  */
 export class Cpu6510 {
   public a = 0;
@@ -40,6 +63,8 @@ export class Cpu6510 {
 
   private irqLine = false;
   private nmiPending = false;
+  private microOps: CpuMicroOperation[] = [];
+  private instructionActive = false;
 
   constructor(public readonly bus: Bus) {}
 
@@ -51,6 +76,8 @@ export class Cpu6510 {
     this.status = Flag.Unused | Flag.InterruptDisable;
     this.irqLine = false;
     this.nmiPending = false;
+    this.microOps = [];
+    this.instructionActive = false;
     this.pc = this.readWord(0xfffc);
     this.cycles = 7;
     return 7;
@@ -90,34 +117,62 @@ export class Cpu6510 {
     this.status = (this.status | Flag.Unused) & 0xff;
   }
 
+  /** Bus direction of the next CPU micro-cycle. Useful to model RDY correctly. */
+  get nextCycleKind(): CpuCycleKind {
+    return this.microOps[0]?.kind ?? 'read';
+  }
+
+  get instructionInProgress(): boolean {
+    return this.instructionActive || this.microOps.length > 0;
+  }
+
+  /**
+   * Advance one CPU bus cycle.
+   *
+   * RDY only arrests read cycles. If rdyHigh is false while the next cycle is a
+   * write, the write completes and the CPU proceeds to the following cycle.
+   */
+  clock(rdyHigh = true, aecHigh = true): CpuClockResult {
+    if (this.microOps.length === 0) {
+      this.beginBoundarySequence();
+    }
+
+    const operation = this.microOps[0]!;
+    if (!aecHigh || (!rdyHigh && operation.kind === 'read')) {
+      return {
+        advanced: false,
+        stalled: true,
+        kind: operation.kind,
+        instructionCompleted: false
+      };
+    }
+
+    this.microOps.shift();
+    operation.run();
+    this.cycles += 1;
+
+    const instructionCompleted = this.microOps.length === 0;
+    if (instructionCompleted) {
+      this.instructionActive = false;
+    }
+
+    return {
+      advanced: true,
+      stalled: false,
+      kind: operation.kind,
+      instructionCompleted
+    };
+  }
+
   step(): number {
-    if (this.nmiPending) {
-      this.nmiPending = false;
-      return this.serviceHardwareInterrupt(0xfffa);
+    const startingCycles = this.cycles;
+    let completed = false;
+
+    while (!completed) {
+      completed = this.clock(true, true).instructionCompleted;
     }
 
-    if (this.irqLine && !this.getFlag(Flag.InterruptDisable)) {
-      return this.serviceHardwareInterrupt(0xfffe);
-    }
-
-    const opcodeAddress = this.pc;
-    const opcode = this.fetchByte();
-    const info = getOpcodeInfo(opcode);
-
-    if (info === undefined) {
-      throw new UnsupportedOpcodeError(opcode, opcodeAddress);
-    }
-
-    const operand = this.resolveOperand(info.mode);
-    let instructionCycles = info.cycles;
-
-    if (info.pageCrossCycle && operand.pageCrossed) {
-      instructionCycles += 1;
-    }
-
-    instructionCycles += this.execute(info, operand);
-    this.cycles += instructionCycles;
-    return instructionCycles;
+    return this.cycles - startingCycles;
   }
 
   run(maxInstructions: number, shouldStop?: (cpu: Cpu6510) => boolean): number {
@@ -135,124 +190,577 @@ export class Cpu6510 {
     return executed;
   }
 
-  private execute(info: OpcodeInfo, operand: ResolvedOperand): number {
+  private beginBoundarySequence(): void {
+    this.instructionActive = true;
+
+    if (this.nmiPending) {
+      this.nmiPending = false;
+      this.scheduleHardwareInterrupt(0xfffa);
+      return;
+    }
+
+    if (this.irqLine && !this.getFlag(Flag.InterruptDisable)) {
+      this.scheduleHardwareInterrupt(0xfffe);
+      return;
+    }
+
+    this.enqueueRead(() => {
+      const opcodeAddress = this.pc;
+      const opcode = this.bus.read(this.pc);
+      this.pc = (this.pc + 1) & 0xffff;
+      const info = getOpcodeInfo(opcode);
+
+      if (info === undefined) {
+        throw new UnsupportedOpcodeError(opcode, opcodeAddress);
+      }
+
+      this.scheduleInstruction(info);
+    });
+  }
+
+  private scheduleInstruction(info: OpcodeInfo): void {
     switch (info.mnemonic) {
-      case 'ADC': this.adc(this.readOperand(operand)); break;
-      case 'AND': this.a = this.setNZ(this.a & this.readOperand(operand)); break;
-      case 'ASL': this.shiftOrRotate(operand, 'ASL'); break;
-      case 'BCC': return this.branch(!this.getFlag(Flag.Carry), operand);
-      case 'BCS': return this.branch(this.getFlag(Flag.Carry), operand);
-      case 'BEQ': return this.branch(this.getFlag(Flag.Zero), operand);
-      case 'BIT': this.bit(this.readOperand(operand)); break;
-      case 'BMI': return this.branch(this.getFlag(Flag.Negative), operand);
-      case 'BNE': return this.branch(!this.getFlag(Flag.Zero), operand);
-      case 'BPL': return this.branch(!this.getFlag(Flag.Negative), operand);
-      case 'BRK': this.brk(); break;
-      case 'BVC': return this.branch(!this.getFlag(Flag.Overflow), operand);
-      case 'BVS': return this.branch(this.getFlag(Flag.Overflow), operand);
+      case 'BRK': this.scheduleBrk(); return;
+      case 'JMP': this.scheduleJmp(info.mode); return;
+      case 'JSR': this.scheduleJsr(); return;
+      case 'RTS': this.scheduleRts(); return;
+      case 'RTI': this.scheduleRti(); return;
+      case 'PHA': this.schedulePush(() => this.a); return;
+      case 'PHP': this.schedulePush(() => this.status | Flag.Break | Flag.Unused); return;
+      case 'PLA': this.schedulePull((value) => { this.a = this.setNZ(value); }); return;
+      case 'PLP': this.schedulePull((value) => { this.loadStatus(value); }); return;
+      case 'BCC': this.scheduleBranch(!this.getFlag(Flag.Carry)); return;
+      case 'BCS': this.scheduleBranch(this.getFlag(Flag.Carry)); return;
+      case 'BEQ': this.scheduleBranch(this.getFlag(Flag.Zero)); return;
+      case 'BMI': this.scheduleBranch(this.getFlag(Flag.Negative)); return;
+      case 'BNE': this.scheduleBranch(!this.getFlag(Flag.Zero)); return;
+      case 'BPL': this.scheduleBranch(!this.getFlag(Flag.Negative)); return;
+      case 'BVC': this.scheduleBranch(!this.getFlag(Flag.Overflow)); return;
+      case 'BVS': this.scheduleBranch(this.getFlag(Flag.Overflow)); return;
+      default:
+        break;
+    }
+
+    if (isStoreMnemonic(info.mnemonic)) {
+      this.scheduleStore(info.mode, info.mnemonic);
+      return;
+    }
+
+    if (isMemoryRmwMnemonic(info.mnemonic) && info.mode !== 'ACC') {
+      this.scheduleMemoryRmw(info.mode, info.mnemonic);
+      return;
+    }
+
+    if (isReadMnemonic(info.mnemonic)) {
+      this.scheduleReadOperand(info.mode, (value) => this.executeReadMnemonic(info.mnemonic, value));
+      return;
+    }
+
+    // Accumulator shifts/rotates and all ordinary implied operations are two
+    // cycle instructions: opcode fetch plus a throw-away read from the next PC.
+    this.enqueueRead(() => {
+      this.bus.read(this.pc);
+      this.executeImpliedMnemonic(info.mnemonic);
+    });
+  }
+
+  private scheduleReadOperand(mode: AddressingMode, consume: (value: number) => void): void {
+    const latch = freshLatch();
+
+    switch (mode) {
+      case 'IMM':
+        this.enqueueRead(() => {
+          const value = this.bus.read(this.pc);
+          this.pc = (this.pc + 1) & 0xffff;
+          consume(value);
+        });
+        return;
+      case 'ZP':
+        this.fetchZeroPageAddress(latch);
+        this.enqueueRead(() => consume(this.bus.read(latch.address)));
+        return;
+      case 'ZPX':
+      case 'ZPY': {
+        const index = mode === 'ZPX' ? () => this.x : () => this.y;
+        this.enqueueRead(() => {
+          latch.base = this.bus.read(this.pc);
+          this.pc = (this.pc + 1) & 0xffff;
+        });
+        this.enqueueRead(() => {
+          this.bus.read(latch.base);
+          latch.address = (latch.base + index()) & 0xff;
+        });
+        this.enqueueRead(() => consume(this.bus.read(latch.address)));
+        return;
+      }
+      case 'ABS':
+        this.fetchAbsoluteAddress(latch);
+        this.enqueueRead(() => consume(this.bus.read(latch.address)));
+        return;
+      case 'ABSX':
+      case 'ABSY': {
+        const index = mode === 'ABSX' ? () => this.x : () => this.y;
+        this.fetchAbsoluteBase(latch);
+        this.enqueueRead(() => {
+          const effective = (latch.base + index()) & 0xffff;
+          const provisional = (latch.base & 0xff00) | (effective & 0x00ff);
+          const value = this.bus.read(provisional);
+          latch.address = effective;
+          if (page(latch.base) === page(effective)) {
+            consume(value);
+          } else {
+            this.enqueueRead(() => consume(this.bus.read(latch.address)));
+          }
+        });
+        return;
+      }
+      case 'INDX':
+        this.enqueueRead(() => {
+          latch.pointer = this.bus.read(this.pc);
+          this.pc = (this.pc + 1) & 0xffff;
+        });
+        this.enqueueRead(() => {
+          this.bus.read(latch.pointer);
+          latch.pointer = (latch.pointer + this.x) & 0xff;
+        });
+        this.enqueueRead(() => { latch.lo = this.bus.read(latch.pointer); });
+        this.enqueueRead(() => {
+          latch.hi = this.bus.read((latch.pointer + 1) & 0xff);
+          latch.address = word(latch.lo, latch.hi);
+        });
+        this.enqueueRead(() => consume(this.bus.read(latch.address)));
+        return;
+      case 'INDY':
+        this.enqueueRead(() => {
+          latch.pointer = this.bus.read(this.pc);
+          this.pc = (this.pc + 1) & 0xffff;
+        });
+        this.enqueueRead(() => { latch.lo = this.bus.read(latch.pointer); });
+        this.enqueueRead(() => {
+          latch.hi = this.bus.read((latch.pointer + 1) & 0xff);
+          latch.base = word(latch.lo, latch.hi);
+        });
+        this.enqueueRead(() => {
+          const effective = (latch.base + this.y) & 0xffff;
+          const provisional = (latch.base & 0xff00) | (effective & 0x00ff);
+          const value = this.bus.read(provisional);
+          latch.address = effective;
+          if (page(latch.base) === page(effective)) {
+            consume(value);
+          } else {
+            this.enqueueRead(() => consume(this.bus.read(latch.address)));
+          }
+        });
+        return;
+      default:
+        throw new Error(`Unsupported read addressing mode ${mode}`);
+    }
+  }
+
+  private scheduleStore(mode: AddressingMode, mnemonic: 'STA' | 'STX' | 'STY'): void {
+    const latch = freshLatch();
+    const value = (): number => {
+      switch (mnemonic) {
+        case 'STA': return this.a;
+        case 'STX': return this.x;
+        case 'STY': return this.y;
+        default: return assertNever(mnemonic);
+      }
+    };
+
+    switch (mode) {
+      case 'ZP':
+        this.fetchZeroPageAddress(latch);
+        this.enqueueWrite(() => this.bus.write(latch.address, value()));
+        return;
+      case 'ZPX':
+      case 'ZPY': {
+        const index = mode === 'ZPX' ? () => this.x : () => this.y;
+        this.enqueueRead(() => {
+          latch.base = this.bus.read(this.pc);
+          this.pc = (this.pc + 1) & 0xffff;
+        });
+        this.enqueueRead(() => {
+          this.bus.read(latch.base);
+          latch.address = (latch.base + index()) & 0xff;
+        });
+        this.enqueueWrite(() => this.bus.write(latch.address, value()));
+        return;
+      }
+      case 'ABS':
+        this.fetchAbsoluteAddress(latch);
+        this.enqueueWrite(() => this.bus.write(latch.address, value()));
+        return;
+      case 'ABSX':
+      case 'ABSY': {
+        const index = mode === 'ABSX' ? () => this.x : () => this.y;
+        this.fetchAbsoluteBase(latch);
+        this.enqueueRead(() => {
+          latch.address = (latch.base + index()) & 0xffff;
+          const provisional = (latch.base & 0xff00) | (latch.address & 0x00ff);
+          this.bus.read(provisional);
+        });
+        this.enqueueWrite(() => this.bus.write(latch.address, value()));
+        return;
+      }
+      case 'INDX':
+        this.enqueueRead(() => {
+          latch.pointer = this.bus.read(this.pc);
+          this.pc = (this.pc + 1) & 0xffff;
+        });
+        this.enqueueRead(() => {
+          this.bus.read(latch.pointer);
+          latch.pointer = (latch.pointer + this.x) & 0xff;
+        });
+        this.enqueueRead(() => { latch.lo = this.bus.read(latch.pointer); });
+        this.enqueueRead(() => {
+          latch.hi = this.bus.read((latch.pointer + 1) & 0xff);
+          latch.address = word(latch.lo, latch.hi);
+        });
+        this.enqueueWrite(() => this.bus.write(latch.address, value()));
+        return;
+      case 'INDY':
+        this.enqueueRead(() => {
+          latch.pointer = this.bus.read(this.pc);
+          this.pc = (this.pc + 1) & 0xffff;
+        });
+        this.enqueueRead(() => { latch.lo = this.bus.read(latch.pointer); });
+        this.enqueueRead(() => {
+          latch.hi = this.bus.read((latch.pointer + 1) & 0xff);
+          latch.base = word(latch.lo, latch.hi);
+        });
+        this.enqueueRead(() => {
+          latch.address = (latch.base + this.y) & 0xffff;
+          const provisional = (latch.base & 0xff00) | (latch.address & 0x00ff);
+          this.bus.read(provisional);
+        });
+        this.enqueueWrite(() => this.bus.write(latch.address, value()));
+        return;
+      default:
+        throw new Error(`Unsupported store addressing mode ${mode}`);
+    }
+  }
+
+  private scheduleMemoryRmw(mode: AddressingMode, mnemonic: 'ASL' | 'DEC' | 'INC' | 'LSR' | 'ROL' | 'ROR'): void {
+    const latch = freshLatch();
+    const readValue = (): void => { latch.value = this.bus.read(latch.address); };
+    const writeOld = (): void => { this.bus.write(latch.address, latch.value); };
+    const writeNew = (): void => { this.bus.write(latch.address, this.transformRmw(mnemonic, latch.value)); };
+
+    switch (mode) {
+      case 'ZP':
+        this.fetchZeroPageAddress(latch);
+        this.enqueueRead(readValue);
+        this.enqueueWrite(writeOld);
+        this.enqueueWrite(writeNew);
+        return;
+      case 'ZPX':
+        this.enqueueRead(() => {
+          latch.base = this.bus.read(this.pc);
+          this.pc = (this.pc + 1) & 0xffff;
+        });
+        this.enqueueRead(() => {
+          this.bus.read(latch.base);
+          latch.address = (latch.base + this.x) & 0xff;
+        });
+        this.enqueueRead(readValue);
+        this.enqueueWrite(writeOld);
+        this.enqueueWrite(writeNew);
+        return;
+      case 'ABS':
+        this.fetchAbsoluteAddress(latch);
+        this.enqueueRead(readValue);
+        this.enqueueWrite(writeOld);
+        this.enqueueWrite(writeNew);
+        return;
+      case 'ABSX':
+        this.fetchAbsoluteBase(latch);
+        this.enqueueRead(() => {
+          latch.address = (latch.base + this.x) & 0xffff;
+          const provisional = (latch.base & 0xff00) | (latch.address & 0x00ff);
+          this.bus.read(provisional);
+        });
+        this.enqueueRead(readValue);
+        this.enqueueWrite(writeOld);
+        this.enqueueWrite(writeNew);
+        return;
+      default:
+        throw new Error(`Unsupported RMW addressing mode ${mode}`);
+    }
+  }
+
+  private scheduleBranch(condition: boolean): void {
+    this.enqueueRead(() => {
+      const byte = this.bus.read(this.pc);
+      this.pc = (this.pc + 1) & 0xffff;
+      if (!condition) {
+        return;
+      }
+
+      const offset = byte < 0x80 ? byte : byte - 0x100;
+      const oldPc = this.pc;
+      const target = (oldPc + offset) & 0xffff;
+
+      this.enqueueRead(() => {
+        this.bus.read(oldPc);
+        this.pc = (oldPc & 0xff00) | (target & 0x00ff);
+        if (page(oldPc) !== page(target)) {
+          this.enqueueRead(() => {
+            this.bus.read(this.pc);
+            this.pc = target;
+          });
+        } else {
+          this.pc = target;
+        }
+      });
+    });
+  }
+
+  private scheduleJmp(mode: AddressingMode): void {
+    const latch = freshLatch();
+    if (mode === 'ABS') {
+      this.enqueueRead(() => {
+        latch.lo = this.bus.read(this.pc);
+        this.pc = (this.pc + 1) & 0xffff;
+      });
+      this.enqueueRead(() => {
+        latch.hi = this.bus.read(this.pc);
+        this.pc = word(latch.lo, latch.hi);
+      });
+      return;
+    }
+
+    if (mode !== 'IND') {
+      throw new Error(`Unsupported JMP mode ${mode}`);
+    }
+
+    this.enqueueRead(() => {
+      latch.lo = this.bus.read(this.pc);
+      this.pc = (this.pc + 1) & 0xffff;
+    });
+    this.enqueueRead(() => {
+      latch.hi = this.bus.read(this.pc);
+      this.pc = (this.pc + 1) & 0xffff;
+      latch.pointer = word(latch.lo, latch.hi);
+    });
+    this.enqueueRead(() => { latch.lo = this.bus.read(latch.pointer); });
+    this.enqueueRead(() => {
+      const highAddress = (latch.pointer & 0xff00) | ((latch.pointer + 1) & 0x00ff);
+      latch.hi = this.bus.read(highAddress);
+      this.pc = word(latch.lo, latch.hi);
+    });
+  }
+
+  private scheduleJsr(): void {
+    const latch = freshLatch();
+    this.enqueueRead(() => {
+      latch.lo = this.bus.read(this.pc);
+      this.pc = (this.pc + 1) & 0xffff;
+    });
+    this.enqueueRead(() => { this.bus.read(0x0100 | this.sp); });
+    this.enqueueWrite(() => {
+      this.bus.write(0x0100 | this.sp, (this.pc >> 8) & 0xff);
+      this.sp = (this.sp - 1) & 0xff;
+    });
+    this.enqueueWrite(() => {
+      this.bus.write(0x0100 | this.sp, this.pc & 0xff);
+      this.sp = (this.sp - 1) & 0xff;
+    });
+    this.enqueueRead(() => {
+      latch.hi = this.bus.read(this.pc);
+      this.pc = word(latch.lo, latch.hi);
+    });
+  }
+
+  private scheduleRts(): void {
+    const latch = freshLatch();
+    this.enqueueRead(() => { this.bus.read(this.pc); });
+    this.enqueueRead(() => { this.bus.read(0x0100 | this.sp); });
+    this.enqueueRead(() => {
+      this.sp = (this.sp + 1) & 0xff;
+      latch.lo = this.bus.read(0x0100 | this.sp);
+    });
+    this.enqueueRead(() => {
+      this.sp = (this.sp + 1) & 0xff;
+      latch.hi = this.bus.read(0x0100 | this.sp);
+      this.pc = word(latch.lo, latch.hi);
+    });
+    this.enqueueRead(() => {
+      this.bus.read(this.pc);
+      this.pc = (this.pc + 1) & 0xffff;
+    });
+  }
+
+  private scheduleRti(): void {
+    const latch = freshLatch();
+    this.enqueueRead(() => { this.bus.read(this.pc); });
+    this.enqueueRead(() => { this.bus.read(0x0100 | this.sp); });
+    this.enqueueRead(() => {
+      this.sp = (this.sp + 1) & 0xff;
+      this.loadStatus(this.bus.read(0x0100 | this.sp));
+    });
+    this.enqueueRead(() => {
+      this.sp = (this.sp + 1) & 0xff;
+      latch.lo = this.bus.read(0x0100 | this.sp);
+    });
+    this.enqueueRead(() => {
+      this.sp = (this.sp + 1) & 0xff;
+      latch.hi = this.bus.read(0x0100 | this.sp);
+      this.pc = word(latch.lo, latch.hi);
+    });
+  }
+
+  private scheduleBrk(): void {
+    const latch = freshLatch();
+    this.enqueueRead(() => {
+      this.bus.read(this.pc);
+      this.pc = (this.pc + 1) & 0xffff;
+    });
+    this.enqueueWrite(() => this.pushCycle((this.pc >> 8) & 0xff));
+    this.enqueueWrite(() => this.pushCycle(this.pc & 0xff));
+    this.enqueueWrite(() => {
+      this.pushCycle(this.status | Flag.Break | Flag.Unused);
+      this.setFlag(Flag.InterruptDisable, true);
+    });
+    this.enqueueRead(() => { latch.lo = this.bus.read(0xfffe); });
+    this.enqueueRead(() => {
+      latch.hi = this.bus.read(0xffff);
+      this.pc = word(latch.lo, latch.hi);
+    });
+  }
+
+  private scheduleHardwareInterrupt(vectorAddress: number): void {
+    const latch = freshLatch();
+    // Hardware IRQ/NMI consumes seven cycles. The first two are discarded reads
+    // from the current PC, followed by the three stack writes and vector reads.
+    this.enqueueRead(() => { this.bus.read(this.pc); });
+    this.enqueueRead(() => { this.bus.read(this.pc); });
+    this.enqueueWrite(() => this.pushCycle((this.pc >> 8) & 0xff));
+    this.enqueueWrite(() => this.pushCycle(this.pc & 0xff));
+    this.enqueueWrite(() => {
+      this.pushCycle((this.status & ~Flag.Break) | Flag.Unused);
+      this.setFlag(Flag.InterruptDisable, true);
+    });
+    this.enqueueRead(() => { latch.lo = this.bus.read(vectorAddress); });
+    this.enqueueRead(() => {
+      latch.hi = this.bus.read((vectorAddress + 1) & 0xffff);
+      this.pc = word(latch.lo, latch.hi);
+    });
+  }
+
+  private schedulePush(value: () => number): void {
+    this.enqueueRead(() => { this.bus.read(this.pc); });
+    this.enqueueWrite(() => this.pushCycle(value()));
+  }
+
+  private schedulePull(consume: (value: number) => void): void {
+    this.enqueueRead(() => { this.bus.read(this.pc); });
+    this.enqueueRead(() => { this.bus.read(0x0100 | this.sp); });
+    this.enqueueRead(() => {
+      this.sp = (this.sp + 1) & 0xff;
+      consume(this.bus.read(0x0100 | this.sp));
+    });
+  }
+
+  private fetchZeroPageAddress(latch: AddressLatch): void {
+    this.enqueueRead(() => {
+      latch.address = this.bus.read(this.pc);
+      this.pc = (this.pc + 1) & 0xffff;
+    });
+  }
+
+  private fetchAbsoluteBase(latch: AddressLatch): void {
+    this.enqueueRead(() => {
+      latch.lo = this.bus.read(this.pc);
+      this.pc = (this.pc + 1) & 0xffff;
+    });
+    this.enqueueRead(() => {
+      latch.hi = this.bus.read(this.pc);
+      this.pc = (this.pc + 1) & 0xffff;
+      latch.base = word(latch.lo, latch.hi);
+    });
+  }
+
+  private fetchAbsoluteAddress(latch: AddressLatch): void {
+    this.enqueueRead(() => {
+      latch.lo = this.bus.read(this.pc);
+      this.pc = (this.pc + 1) & 0xffff;
+    });
+    this.enqueueRead(() => {
+      latch.hi = this.bus.read(this.pc);
+      this.pc = (this.pc + 1) & 0xffff;
+      latch.address = word(latch.lo, latch.hi);
+    });
+  }
+
+  private executeReadMnemonic(mnemonic: Mnemonic, value: number): void {
+    switch (mnemonic) {
+      case 'ADC': this.adc(value); break;
+      case 'AND': this.a = this.setNZ(this.a & value); break;
+      case 'BIT': this.bit(value); break;
+      case 'CMP': this.compare(this.a, value); break;
+      case 'CPX': this.compare(this.x, value); break;
+      case 'CPY': this.compare(this.y, value); break;
+      case 'EOR': this.a = this.setNZ(this.a ^ value); break;
+      case 'LDA': this.a = this.setNZ(value); break;
+      case 'LDX': this.x = this.setNZ(value); break;
+      case 'LDY': this.y = this.setNZ(value); break;
+      case 'ORA': this.a = this.setNZ(this.a | value); break;
+      case 'SBC': this.sbc(value); break;
+      default: throw new Error(`${mnemonic} is not a read-class instruction.`);
+    }
+  }
+
+  private executeImpliedMnemonic(mnemonic: Mnemonic): void {
+    switch (mnemonic) {
+      case 'ASL': this.a = this.transformRmw('ASL', this.a); break;
       case 'CLC': this.setFlag(Flag.Carry, false); break;
       case 'CLD': this.setFlag(Flag.Decimal, false); break;
       case 'CLI': this.setFlag(Flag.InterruptDisable, false); break;
       case 'CLV': this.setFlag(Flag.Overflow, false); break;
-      case 'CMP': this.compare(this.a, this.readOperand(operand)); break;
-      case 'CPX': this.compare(this.x, this.readOperand(operand)); break;
-      case 'CPY': this.compare(this.y, this.readOperand(operand)); break;
-      case 'DEC': this.rmw(operand, (value) => this.setNZ((value - 1) & 0xff)); break;
       case 'DEX': this.x = this.setNZ((this.x - 1) & 0xff); break;
       case 'DEY': this.y = this.setNZ((this.y - 1) & 0xff); break;
-      case 'EOR': this.a = this.setNZ(this.a ^ this.readOperand(operand)); break;
-      case 'INC': this.rmw(operand, (value) => this.setNZ((value + 1) & 0xff)); break;
       case 'INX': this.x = this.setNZ((this.x + 1) & 0xff); break;
       case 'INY': this.y = this.setNZ((this.y + 1) & 0xff); break;
-      case 'JMP': this.pc = this.requireAddress(operand); break;
-      case 'JSR': this.jsr(this.requireAddress(operand)); break;
-      case 'LDA': this.a = this.setNZ(this.readOperand(operand)); break;
-      case 'LDX': this.x = this.setNZ(this.readOperand(operand)); break;
-      case 'LDY': this.y = this.setNZ(this.readOperand(operand)); break;
-      case 'LSR': this.shiftOrRotate(operand, 'LSR'); break;
+      case 'LSR': this.a = this.transformRmw('LSR', this.a); break;
       case 'NOP': break;
-      case 'ORA': this.a = this.setNZ(this.a | this.readOperand(operand)); break;
-      case 'PHA': this.push(this.a); break;
-      case 'PHP': this.push(this.status | Flag.Break | Flag.Unused); break;
-      case 'PLA': this.a = this.setNZ(this.pop()); break;
-      case 'PLP': this.loadStatus(this.pop()); break;
-      case 'ROL': this.shiftOrRotate(operand, 'ROL'); break;
-      case 'ROR': this.shiftOrRotate(operand, 'ROR'); break;
-      case 'RTI': this.rti(); break;
-      case 'RTS': this.rts(); break;
-      case 'SBC': this.sbc(this.readOperand(operand)); break;
+      case 'ROL': this.a = this.transformRmw('ROL', this.a); break;
+      case 'ROR': this.a = this.transformRmw('ROR', this.a); break;
       case 'SEC': this.setFlag(Flag.Carry, true); break;
       case 'SED': this.setFlag(Flag.Decimal, true); break;
       case 'SEI': this.setFlag(Flag.InterruptDisable, true); break;
-      case 'STA': this.bus.write(this.requireAddress(operand), this.a); break;
-      case 'STX': this.bus.write(this.requireAddress(operand), this.x); break;
-      case 'STY': this.bus.write(this.requireAddress(operand), this.y); break;
       case 'TAX': this.x = this.setNZ(this.a); break;
       case 'TAY': this.y = this.setNZ(this.a); break;
       case 'TSX': this.x = this.setNZ(this.sp); break;
       case 'TXA': this.a = this.setNZ(this.x); break;
       case 'TXS': this.sp = this.x; break;
       case 'TYA': this.a = this.setNZ(this.y); break;
-      default: return assertNever(info.mnemonic);
+      default: throw new Error(`${mnemonic} is not an implied/accumulator instruction.`);
     }
-
-    return 0;
   }
 
-  private resolveOperand(mode: AddressingMode): ResolvedOperand {
-    switch (mode) {
-      case 'IMP':
-      case 'ACC':
-        return { pageCrossed: false };
-      case 'IMM':
-        return { value: this.fetchByte(), pageCrossed: false };
-      case 'ZP':
-        return { address: this.fetchByte(), pageCrossed: false };
-      case 'ZPX':
-        return { address: (this.fetchByte() + this.x) & 0xff, pageCrossed: false };
-      case 'ZPY':
-        return { address: (this.fetchByte() + this.y) & 0xff, pageCrossed: false };
-      case 'ABS':
-        return { address: this.fetchWord(), pageCrossed: false };
-      case 'ABSX': {
-        const base = this.fetchWord();
-        const address = (base + this.x) & 0xffff;
-        return { address, pageCrossed: page(base) !== page(address) };
+  private transformRmw(operation: 'ASL' | 'DEC' | 'INC' | 'LSR' | 'ROL' | 'ROR', value: number): number {
+    switch (operation) {
+      case 'DEC': return this.setNZ((value - 1) & 0xff);
+      case 'INC': return this.setNZ((value + 1) & 0xff);
+      case 'ASL':
+        this.setFlag(Flag.Carry, (value & 0x80) !== 0);
+        return this.setNZ((value << 1) & 0xff);
+      case 'LSR':
+        this.setFlag(Flag.Carry, (value & 0x01) !== 0);
+        return this.setNZ(value >> 1);
+      case 'ROL': {
+        const carryIn = this.getFlag(Flag.Carry) ? 1 : 0;
+        this.setFlag(Flag.Carry, (value & 0x80) !== 0);
+        return this.setNZ(((value << 1) | carryIn) & 0xff);
       }
-      case 'ABSY': {
-        const base = this.fetchWord();
-        const address = (base + this.y) & 0xffff;
-        return { address, pageCrossed: page(base) !== page(address) };
-      }
-      case 'IND': {
-        const pointer = this.fetchWord();
-        const lo = this.bus.read(pointer);
-        // NMOS 6502 JMP ($xxFF) hardware bug: the high byte wraps inside the same page.
-        const highAddress = (pointer & 0xff00) | ((pointer + 1) & 0x00ff);
-        const hi = this.bus.read(highAddress);
-        return { address: word(lo, hi), pageCrossed: false };
-      }
-      case 'INDX': {
-        const pointer = (this.fetchByte() + this.x) & 0xff;
-        const lo = this.bus.read(pointer);
-        const hi = this.bus.read((pointer + 1) & 0xff);
-        return { address: word(lo, hi), pageCrossed: false };
-      }
-      case 'INDY': {
-        const pointer = this.fetchByte();
-        const lo = this.bus.read(pointer);
-        const hi = this.bus.read((pointer + 1) & 0xff);
-        const base = word(lo, hi);
-        const address = (base + this.y) & 0xffff;
-        return { address, pageCrossed: page(base) !== page(address) };
-      }
-      case 'REL': {
-        const byte = this.fetchByte();
-        const relativeOffset = byte < 0x80 ? byte : byte - 0x100;
-        return { relativeOffset, pageCrossed: false };
+      case 'ROR': {
+        const carryIn = this.getFlag(Flag.Carry) ? 1 : 0;
+        this.setFlag(Flag.Carry, (value & 0x01) !== 0);
+        return this.setNZ(((carryIn << 7) | (value >> 1)) & 0xff);
       }
       default:
-        return assertNever(mode);
+        return assertNever(operation);
     }
   }
 
@@ -270,10 +778,6 @@ export class Cpu6510 {
       return;
     }
 
-    // NMOS 6502 decimal ADC has deliberately odd flag behavior. Z comes from
-    // the unadjusted binary sum, while N and V come from the intermediate
-    // high-nibble addition after the low-nibble decimal carry has propagated.
-    // C comes from the final decimal high-nibble correction.
     let low = (a & 0x0f) + (value & 0x0f) + carryIn;
     let decimalCarry = low > 9;
 
@@ -312,7 +816,6 @@ export class Cpu6510 {
       return;
     }
 
-    // As on NMOS silicon, N/Z/V are derived before decimal correction.
     this.setNZ(binaryResult);
 
     let low = (a & 0x0f) - (value & 0x0f) - borrow;
@@ -343,147 +846,13 @@ export class Cpu6510 {
     this.setNZ(result);
   }
 
-  private shiftOrRotate(operand: ResolvedOperand, operation: 'ASL' | 'LSR' | 'ROL' | 'ROR'): void {
-    const transform = (value: number): number => {
-      const carryIn = this.getFlag(Flag.Carry) ? 1 : 0;
-      let result: number;
-
-      switch (operation) {
-        case 'ASL':
-          this.setFlag(Flag.Carry, (value & 0x80) !== 0);
-          result = (value << 1) & 0xff;
-          break;
-        case 'LSR':
-          this.setFlag(Flag.Carry, (value & 0x01) !== 0);
-          result = value >> 1;
-          break;
-        case 'ROL':
-          this.setFlag(Flag.Carry, (value & 0x80) !== 0);
-          result = ((value << 1) | carryIn) & 0xff;
-          break;
-        case 'ROR':
-          this.setFlag(Flag.Carry, (value & 0x01) !== 0);
-          result = ((carryIn << 7) | (value >> 1)) & 0xff;
-          break;
-        default:
-          return assertNever(operation);
-      }
-
-      return this.setNZ(result);
-    };
-
-    if (operand.address === undefined) {
-      this.a = transform(this.a);
-    } else {
-      this.rmw(operand, transform);
-    }
-  }
-
-  private rmw(operand: ResolvedOperand, transform: (value: number) => number): void {
-    const address = this.requireAddress(operand);
-    const oldValue = this.bus.read(address);
-
-    // NMOS 6502 memory RMW instructions perform a dummy write of the old value
-    // before writing the transformed value. This becomes observable on C64 I/O.
-    this.bus.write(address, oldValue);
-    this.bus.write(address, transform(oldValue));
-  }
-
-  private branch(condition: boolean, operand: ResolvedOperand): number {
-    if (!condition) {
-      return 0;
-    }
-
-    const offset = operand.relativeOffset;
-    if (offset === undefined) {
-      throw new Error('Branch instruction missing relative offset.');
-    }
-
-    const oldPc = this.pc;
-    this.pc = (this.pc + offset) & 0xffff;
-    return page(oldPc) === page(this.pc) ? 1 : 2;
-  }
-
-  private brk(): void {
-    // Opcode fetch already advanced PC by one; BRK behaves as a two-byte instruction.
-    this.pc = (this.pc + 1) & 0xffff;
-    this.push((this.pc >> 8) & 0xff);
-    this.push(this.pc & 0xff);
-    this.push(this.status | Flag.Break | Flag.Unused);
-    this.setFlag(Flag.InterruptDisable, true);
-    this.pc = this.readWord(0xfffe);
-  }
-
-  private jsr(address: number): void {
-    const returnAddress = (this.pc - 1) & 0xffff;
-    this.push((returnAddress >> 8) & 0xff);
-    this.push(returnAddress & 0xff);
-    this.pc = address;
-  }
-
-  private rts(): void {
-    const lo = this.pop();
-    const hi = this.pop();
-    this.pc = (word(lo, hi) + 1) & 0xffff;
-  }
-
-  private rti(): void {
-    this.loadStatus(this.pop());
-    const lo = this.pop();
-    const hi = this.pop();
-    this.pc = word(lo, hi);
-  }
-
-  private serviceHardwareInterrupt(vectorAddress: number): number {
-    this.push((this.pc >> 8) & 0xff);
-    this.push(this.pc & 0xff);
-    this.push((this.status & ~Flag.Break) | Flag.Unused);
-    this.setFlag(Flag.InterruptDisable, true);
-    this.pc = this.readWord(vectorAddress);
-    this.cycles += 7;
-    return 7;
-  }
-
-  private push(value: number): void {
-    this.bus.write(0x0100 | this.sp, value);
+  private pushCycle(value: number): void {
+    this.bus.write(0x0100 | this.sp, value & 0xff);
     this.sp = (this.sp - 1) & 0xff;
-  }
-
-  private pop(): number {
-    this.sp = (this.sp + 1) & 0xff;
-    return this.bus.read(0x0100 | this.sp);
   }
 
   private loadStatus(value: number): void {
     this.status = ((value & ~Flag.Break) | Flag.Unused) & 0xff;
-  }
-
-  private readOperand(operand: ResolvedOperand): number {
-    if (operand.value !== undefined) {
-      return operand.value;
-    }
-
-    return this.bus.read(this.requireAddress(operand));
-  }
-
-  private requireAddress(operand: ResolvedOperand): number {
-    if (operand.address === undefined) {
-      throw new Error('Instruction requires a resolved memory address.');
-    }
-
-    return operand.address;
-  }
-
-  private fetchByte(): number {
-    const value = this.bus.read(this.pc);
-    this.pc = (this.pc + 1) & 0xffff;
-    return value;
-  }
-
-  private fetchWord(): number {
-    const lo = this.fetchByte();
-    const hi = this.fetchByte();
-    return word(lo, hi);
   }
 
   private readWord(address: number): number {
@@ -498,6 +867,34 @@ export class Cpu6510 {
     this.setFlag(Flag.Negative, (result & 0x80) !== 0);
     return result;
   }
+
+  private enqueueRead(run: () => void): void {
+    this.microOps.push({ kind: 'read', run });
+  }
+
+  private enqueueWrite(run: () => void): void {
+    this.microOps.push({ kind: 'write', run });
+  }
+}
+
+function freshLatch(): AddressLatch {
+  return { lo: 0, hi: 0, base: 0, address: 0, pointer: 0, value: 0 };
+}
+
+function isReadMnemonic(mnemonic: Mnemonic): boolean {
+  return mnemonic === 'ADC' || mnemonic === 'AND' || mnemonic === 'BIT'
+    || mnemonic === 'CMP' || mnemonic === 'CPX' || mnemonic === 'CPY'
+    || mnemonic === 'EOR' || mnemonic === 'LDA' || mnemonic === 'LDX'
+    || mnemonic === 'LDY' || mnemonic === 'ORA' || mnemonic === 'SBC';
+}
+
+function isStoreMnemonic(mnemonic: Mnemonic): mnemonic is 'STA' | 'STX' | 'STY' {
+  return mnemonic === 'STA' || mnemonic === 'STX' || mnemonic === 'STY';
+}
+
+function isMemoryRmwMnemonic(mnemonic: Mnemonic): mnemonic is 'ASL' | 'DEC' | 'INC' | 'LSR' | 'ROL' | 'ROR' {
+  return mnemonic === 'ASL' || mnemonic === 'DEC' || mnemonic === 'INC'
+    || mnemonic === 'LSR' || mnemonic === 'ROL' || mnemonic === 'ROR';
 }
 
 function page(address: number): number {

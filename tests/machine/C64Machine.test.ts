@@ -150,3 +150,51 @@ describe('C64Machine VIC-II timing integration', () => {
     expect(machine.cpu.pc).toBe(0xe200);
   });
 });
+
+describe('C64Machine VIC-II bus arbitration', () => {
+  it('stalls a read-only CPU stream for 43 master cycles on a PAL bad line', () => {
+    const machine = new C64Machine();
+    const kernal = new Uint8Array(KERNAL_ROM_SIZE).fill(0xea); // NOP stream
+    kernal[0x1ffc] = 0x00;
+    kernal[0x1ffd] = 0xe0;
+    kernal[0x1ffe] = 0x00;
+    kernal[0x1fff] = 0xe0;
+    machine.loadRom('kernal', kernal);
+    machine.powerOn();
+    machine.bus.io.vic.write(0x11, 0x1b); // DEN + YSCROLL=3
+
+    let guard = 0;
+    while (!(machine.bus.io.vic.rasterLine === 51 && machine.bus.io.vic.rasterCycle === 12)) {
+      machine.tickSystemCycle();
+      guard += 1;
+      if (guard > 4000) throw new Error('Failed to reach first PAL bad line.');
+    }
+
+    const cpuCyclesBefore = machine.cpu.cycles;
+    const stallsBefore = machine.cpuStallCycles;
+    const masterBefore = machine.masterCycles;
+
+    for (let i = 0; i < 43; i += 1) {
+      machine.tickSystemCycle();
+    }
+
+    expect(machine.bus.io.vic.rasterCycle).toBe(55);
+    expect(machine.masterCycles - masterBefore).toBe(43);
+    expect(machine.cpu.cycles).toBe(cpuCyclesBefore);
+    expect(machine.cpuStallCycles - stallsBefore).toBe(43);
+
+    machine.tickSystemCycle();
+    expect(machine.cpu.cycles).toBe(cpuCyclesBefore + 1);
+  });
+
+  it('reports the VIC bus signals that governed each master cycle', () => {
+    const machine = new C64Machine();
+    machine.loadRom('kernal', kernalWithResetVector(0xe000));
+    machine.powerOn();
+
+    const result = machine.tickSystemCycle();
+    expect(result.baHigh).toBe(true);
+    expect(result.aecHigh).toBe(true);
+    expect(result.masterCycle).toBe(machine.masterCycles);
+  });
+});

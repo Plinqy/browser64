@@ -1,107 +1,108 @@
-# Verification — v0.4
+# Verification — v0.5
 
-This file records verification performed on the v0.4 source tree.
+This file records verification performed while preparing the v0.5 patch.
 
-## Result
+## Scope
 
-**PASS for strict TypeScript and direct runtime verification available in this execution environment.**
+v0.5 changes timing-sensitive code in three places:
 
-`npm install` was attempted but the package registry did not respond before the execution timeout. The repository's pinned Vite/Vitest dependencies therefore could not be installed here, so `npm test` and `npm run build` are not claimed as executed.
+- `Cpu6510` now schedules official instructions as individual read/write bus micro-cycles.
+- `VicII` now models bad-line detection, BA/AEC timing, and 40 c-accesses.
+- `C64Machine` now advances CPU, VIC-II, and both CIAs on one shared system-cycle boundary.
 
-The emulator source was instead checked with the locally available TypeScript compiler, the complete source/test tree was typechecked with verification-only dependency declarations, and an independently compiled CommonJS copy of `src/core` was exercised directly under Node.
+Because the CPU executor was structurally rewritten, verification emphasized regression equivalence as well as the new timing behavior.
 
 ## Strict TypeScript
 
-The complete browser/core source passed strict compilation with the repository's relevant constraints:
+The complete source and test tree was checked under strict TypeScript options matching the project configuration. The sandbox cannot install npm packages, so temporary declaration shims for Vitest/Node modules were used only by the verification command and were not added to the project.
 
-- `strict`
-- `noUncheckedIndexedAccess`
-- `exactOptionalPropertyTypes`
-- `noFallthroughCasesInSwitch`
-- `noImplicitOverride`
-- `noUnusedLocals`
-- `noUnusedParameters`
+Result: **PASS**.
 
-Result: **PASS**
+## Official-opcode differential regression
 
-The complete `src` + `tests` + `vite.config.ts` tree was also typechecked using temporary local declarations for `vitest`, `vitest/config`, and the Node built-ins referenced by the optional Klaus test. Those declarations are verification-only and are not included in the project.
+The v0.5 cycle engine was compared against the verified v0.4 instruction executor for every one of the 151 official opcodes across five deterministic processor/memory states.
 
-Result: **PASS**
+For each of the 755 cases the harness compared:
 
-## v0.4 VIC-II Direct Runtime Assertions
+- returned instruction cycle count,
+- A/X/Y,
+- SP and PC,
+- processor status,
+- the complete 64 KiB RAM image after execution.
 
-An independently compiled copy of `src/core` was exercised directly under Node. Assertions covered:
+Result: **755 / 755 PASS**.
 
-- PAL 6569 timing profile of 63 cycles per line
-- 312 PAL raster lines per frame
-- 19,656 cycles per PAL frame
-- raster line/cycle wrap behavior
-- frame counter advancement
-- nine-bit raster compare foundation
-- raster interrupt latching
-- `$D019` IRQ status and write-one-to-clear acknowledgement
-- `$D01A` raster interrupt masking
-- live raster high-bit read through `$D011`
-- live raster low-byte read through `$D012`
-- CIA2-selected VIC bank changes
-- VIC character-ROM shadowing in banks 0 and 2
-- RAM visibility instead of character ROM in VIC banks 1 and 3
-- standard-text screen-code fetch
-- character-glyph fetch
-- color-RAM nibble fetch
-- border/background color rendering
-- display-disable border behavior
-- machine master-cycle accounting
-- VIC raster IRQ delivery to the 6510 IRQ input
+This verifies that the move from atomic instruction execution to bus-cycle scheduling preserves the existing architectural instruction behavior while changing when accesses occur.
 
-Result: **PASS**
+## CPU cycle/RDY/AEC assertions
 
-## v0.3 Regression Assertions
+Focused direct runtime checks verify that:
 
-The v0.3 direct runtime assertion suite was rerun against the v0.4 compiled core. It covers the MOS 6526 timer, ICR, FLAG, CNT, serial-input, TOD/alarm, keyboard matrix, joystick wiring, CIA2 VIC-bank selection, CIA1 IRQ delivery, and CIA2/RESTORE NMI integration.
+- an immediate instruction advances one bus cycle at a time,
+- RDY-low read cycles do not advance PC/registers or CPU cycle count,
+- write cycles complete while RDY/BA is low,
+- AEC-low prevents both reads and writes from advancing,
+- `step()` still returns the documented instruction cycle count when the bus is continuously available.
 
-Result: **PASS**
+Result: **PASS**.
 
-## v0.2 Regression Assertions
+## VIC-II bad-line assertions
 
-The v0.2 machine/banking smoke suite was rerun against the v0.4 compiled core. It covers all eight LORAM/HIRAM/CHAREN combinations, ROM/I/O selection, RAM-under-ROM writes, the official opcode table count, and synthetic KERNAL reset-vector execution.
+Focused direct runtime checks verify PAL bad-line behavior:
 
-Result: **PASS**
+- DEN observation on raster `$30`,
+- YSCROLL/raster bad-line matching,
+- BA low beginning at cycle 12,
+- AEC low on cycles 15-54,
+- both signals released for cycle 55,
+- exactly 40 c-accesses,
+- screen-code and color-nibble values latched into the video/color matrix buffers.
 
-## CPU Regression Boundary
+Result: **PASS**.
 
-No files under `src/core/cpu/` were changed by v0.4. The CPU implementation therefore remains byte-for-byte the previously validated core that reached the Klaus NMOS 6502 functional-suite success trap `$3469` after 30,646,177 instructions.
+## Machine-level bus arbitration
 
-The project does not redistribute the Klaus binary. For a local regression, place a legal copy of `6502_functional_test.bin` in `tests/assets/` and run `npm test`.
+A KERNAL-ROM NOP stream was run through `C64Machine` to the first normal PAL bad line (`$33` with YSCROLL=3). For a read-only NOP stream:
 
-## Known Timing Boundary
+- master time advanced 43 cycles from raster cycle 12 through 54,
+- CPU cycle count did not advance during those 43 cycles,
+- `cpuStallCycles` increased by 43,
+- CPU execution resumed on cycle 55.
 
-v0.4 introduces a real one-system-cycle machine clock for VIC-II and both CIAs, but the CPU is still instruction-granular. `Cpu6510.step()` completes all reads/writes for an instruction before `C64Machine` replays the returned cycle count through the peripheral clock.
+Result: **PASS**.
 
-Consequences:
+The 43-cycle hold is intentional: BA goes low three cycles before the 40 AEC-low c-access cycles, and a read-heavy CPU stream stops immediately on BA/RDY.
 
-- raster counters and peripheral elapsed-cycle totals are deterministic;
-- raster IRQs become visible at instruction boundaries;
-- a CPU write to `$D020`, `$D011`, etc. is not yet positioned on its exact bus cycle;
-- VIC BA/AEC stalls cannot yet pause a CPU read mid-instruction;
-- bad-line, sprite-DMA, stable-raster, and border-opening timing are **not** claimed cycle-exact.
+## Previous-phase runtime regression
 
-This is the intended handoff point for the next phase: a resumable CPU bus-cycle/micro-operation execution model plus VIC bus arbitration.
+The direct v0.2, v0.3, and v0.4 runtime regression harnesses were rerun against the compiled v0.5 core.
 
-## Framebuffer Boundary
+Results:
 
-The v0.4 framebuffer is a 384×272 logical presentation with a centered 320×200 standard text area and border. It is not a literal 504-dot PAL raster capture. Raster timing and framebuffer presentation are intentionally separated so later cycle/dot rendering can replace the presentation layer without redesigning the master scheduler.
+- v0.2 C64 banking/machine smoke assertions: **PASS**
+- v0.3 CIA/runtime assertions: **PASS**
+- v0.4 VIC text/raster assertions: **PASS**
 
-Only standard hires character mode is rendered in v0.4. Bitmap, multicolor, ECM, sprites, fine scrolling, and border tricks remain deferred.
+## npm/Vitest limitation in this sandbox
 
-## Recommended Local Commands
+`npm install` could not complete within the sandbox because package-registry access timed out. Therefore the actual local Vite/Vitest commands could not be executed here.
 
-With registry access:
+The patch adds normal Vitest coverage for the new CPU cycle API, VIC bad-line behavior, and machine bus stalls. Run on a normal development machine:
 
 ```bash
 npm install
 npm run build
-npm test
+npm run test
 ```
 
-If the Klaus binary is available, copy it to `tests/assets/6502_functional_test.bin` before `npm test`.
+The optional Klaus functional test remains available through `tests/cpu/KlausFunctional.test.ts` when `tests/assets/6502_functional_test.bin` is supplied. The binary is not redistributed with this project.
+
+## Known timing boundary after v0.5
+
+v0.5 establishes real CPU/VIC cycle arbitration for bad-line c-accesses, but it is not yet a complete cycle-exact VIC-II:
+
+- sprite DMA is not modeled,
+- g-accesses and row-counter/VC/VCBASE timing are not modeled,
+- standard-text pixels are still rendered from a frame-time memory snapshot rather than exclusively from the bad-line-latched matrix data,
+- border transitions are not dot-positioned,
+- obscure IRQ recognition and reset-pin timing remain future CPU timing work.

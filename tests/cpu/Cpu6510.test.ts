@@ -314,3 +314,71 @@ describe('official opcode execution smoke test', () => {
     }
   });
 });
+
+describe('cycle-steppable execution and RDY/AEC behavior', () => {
+  it('advances an instruction one bus cycle at a time', () => {
+    const { cpu } = machine([0xa9, 0x42]); // LDA #$42
+
+    const opcodeFetch = cpu.clock();
+    expect(opcodeFetch.advanced).toBe(true);
+    expect(opcodeFetch.kind).toBe('read');
+    expect(opcodeFetch.instructionCompleted).toBe(false);
+    expect(cpu.pc).toBe(0x8001);
+    expect(cpu.a).toBe(0x00);
+
+    const operandRead = cpu.clock();
+    expect(operandRead.instructionCompleted).toBe(true);
+    expect(cpu.pc).toBe(0x8002);
+    expect(cpu.a).toBe(0x42);
+  });
+
+  it('holds a read micro-cycle while RDY is low without consuming a CPU cycle', () => {
+    const { cpu } = machine([0xa9, 0x42]);
+    cpu.clock(); // opcode fetch
+    const beforeCycles = cpu.cycles;
+    const beforePc = cpu.pc;
+
+    const held = cpu.clock(false, true);
+
+    expect(held.stalled).toBe(true);
+    expect(held.advanced).toBe(false);
+    expect(held.kind).toBe('read');
+    expect(cpu.cycles).toBe(beforeCycles);
+    expect(cpu.pc).toBe(beforePc);
+    expect(cpu.a).toBe(0x00);
+
+    expect(cpu.clock(true, true).instructionCompleted).toBe(true);
+    expect(cpu.a).toBe(0x42);
+  });
+
+  it('allows a write cycle to finish while BA/RDY is low', () => {
+    const { cpu, bus } = machine([0x8d, 0x00, 0x20]); // STA $2000
+    cpu.a = 0x5a;
+
+    cpu.clock(); // opcode
+    cpu.clock(); // low address
+    cpu.clock(); // high address
+    expect(cpu.nextCycleKind).toBe('write');
+
+    const write = cpu.clock(false, true);
+    expect(write.stalled).toBe(false);
+    expect(write.instructionCompleted).toBe(true);
+    expect(bus.read(0x2000)).toBe(0x5a);
+  });
+
+  it('does not advance even a pending write after AEC gives the bus to VIC-II', () => {
+    const { cpu, bus } = machine([0x8d, 0x00, 0x20]); // STA $2000
+    cpu.a = 0x5a;
+
+    cpu.clock();
+    cpu.clock();
+    cpu.clock();
+
+    const held = cpu.clock(false, false);
+    expect(held.stalled).toBe(true);
+    expect(bus.read(0x2000)).toBe(0x00);
+
+    cpu.clock(true, true);
+    expect(bus.read(0x2000)).toBe(0x5a);
+  });
+});
