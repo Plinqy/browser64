@@ -1,0 +1,25 @@
+{
+  "name": "c64-browser-emulator",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "A from-scratch Commodore 64 emulator for the browser, beginning with an NMOS 6502/6510 CPU core.",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:ui": "vitest --ui"
+  },
+  "devDependencies": {
+    "@types/node": "^26.2.0",
+    "@vitest/ui": "^4.1.10",
+    "typescript": "^7.0.2",
+    "vite": "^8.2.2",
+    "vitest": "^4.1.10"
+  },
+  "engines": {
+    "node": ">=22.12.0"
+  }
+}
