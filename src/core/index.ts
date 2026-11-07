@@ -21,6 +21,7 @@ export { Disassembler } from './debugger/Disassembler';
 export { TraceFormatter, formatFlags } from './debugger/TraceFormatter';
 export {
   VicII,
+  VicGraphicsMode,
   VIC_ACTIVE_HEIGHT,
   VIC_ACTIVE_WIDTH,
   VIC_ACTIVE_X,

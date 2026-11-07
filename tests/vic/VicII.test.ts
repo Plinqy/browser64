@@ -72,35 +72,42 @@ describe('VicII raster timing and interrupts', () => {
 });
 
 describe('VicII standard text rendering', () => {
-  it('renders screen codes, character ROM, color RAM, background, and border', () => {
+  it('renders fetched screen codes, character ROM, color RAM, background, and border', () => {
     const bus = new C64Bus();
     bus.roms.load('character', characterRomWithSinglePixel());
 
     bus.writePhysicalRam(0x0400, 0x00);
     bus.io.colorRam.write(0, 0x02);
-    bus.io.vic.write(0x11, 0x10); // DEN, standard text
-    bus.io.vic.write(0x16, 0x08); // 40-column select, hires text
+    bus.io.vic.write(0x11, 0x1b); // DEN, 25 rows, YSCROLL=3, standard text
+    bus.io.vic.write(0x16, 0x08); // 40-column select, XSCROLL=0, hires text
     bus.io.vic.write(0x18, 0x14); // screen $0400, chars $1000
     bus.io.vic.write(0x20, 0x06); // border blue
     bus.io.vic.write(0x21, 0x00); // background black
 
+    // Raster 51 is the first default bad line. Cycle 15 fetches matrix column 0
+    // and cycle 16 consumes it in the first g-access.
+    bus.io.vic.tick(51 * 63 + 16);
+
     const frame = bus.io.vic.renderFrame();
     const activeStart = VIC_ACTIVE_Y * VIC_FRAMEBUFFER_WIDTH + VIC_ACTIVE_X;
+    const sameLineBorder = VIC_ACTIVE_Y * VIC_FRAMEBUFFER_WIDTH;
 
-    expect(frame[0]).toBe(0x06);
+    expect(frame[sameLineBorder]).toBe(0x06);
     expect(frame[activeStart]).toBe(0x02);
     expect(frame[activeStart + 1]).toBe(0x00);
   });
 
   it('shows only the border when display enable is clear', () => {
     const bus = new C64Bus();
+    bus.io.vic.write(0x11, 0x0b); // RSEL + YSCROLL=3, DEN clear
+    bus.io.vic.write(0x16, 0x08);
     bus.io.vic.write(0x20, 0x05);
     bus.io.vic.write(0x21, 0x01);
+    bus.io.vic.tick(51 * 63 + 1);
 
     const frame = bus.io.vic.renderFrame();
     const activeStart = VIC_ACTIVE_Y * VIC_FRAMEBUFFER_WIDTH + VIC_ACTIVE_X;
 
-    expect(frame[0]).toBe(0x05);
     expect(frame[activeStart]).toBe(0x05);
   });
 });

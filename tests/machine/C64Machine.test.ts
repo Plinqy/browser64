@@ -198,3 +198,44 @@ describe('C64Machine VIC-II bus arbitration', () => {
     expect(result.masterCycle).toBe(machine.masterCycles);
   });
 });
+
+describe('C64Machine sprite DMA arbitration', () => {
+  it('stalls a read-only CPU stream for the PAL five-cycle single-sprite DMA window', () => {
+    const machine = new C64Machine();
+    const kernal = new Uint8Array(KERNAL_ROM_SIZE).fill(0xea); // NOP stream
+    kernal[0x1ffc] = 0x00;
+    kernal[0x1ffd] = 0xe0;
+    machine.loadRom('kernal', kernal);
+    machine.powerOn();
+
+    // Sprite 0 first appears on raster Y+1. Use raster 52 so this is not a bad line.
+    machine.bus.io.vic.write(0x11, 0x1b);
+    machine.bus.io.vic.write(0x16, 0x08);
+    machine.bus.io.vic.write(0x18, 0x14);
+    machine.bus.writePhysicalRam(0x07f8, 0x20);
+    machine.bus.writePhysicalRam(0x0800, 0x80);
+    machine.bus.io.vic.write(0x00, 24);
+    machine.bus.io.vic.write(0x01, 51);
+    machine.bus.io.vic.write(0x15, 0x01);
+
+    let guard = 0;
+    while (!(machine.bus.io.vic.rasterLine === 52 && machine.bus.io.vic.rasterCycle === 55)) {
+      machine.tickSystemCycle();
+      guard += 1;
+      if (guard > 5000) throw new Error('Failed to reach sprite-0 PAL DMA window.');
+    }
+
+    const cpuBefore = machine.cpu.cycles;
+    const stallsBefore = machine.cpuStallCycles;
+    for (let i = 0; i < 5; i += 1) {
+      machine.tickSystemCycle();
+    }
+
+    expect(machine.cpu.cycles).toBe(cpuBefore);
+    expect(machine.cpuStallCycles - stallsBefore).toBe(5);
+    expect(machine.bus.io.vic.rasterCycle).toBe(60);
+
+    machine.tickSystemCycle();
+    expect(machine.cpu.cycles).toBe(cpuBefore + 1);
+  });
+});

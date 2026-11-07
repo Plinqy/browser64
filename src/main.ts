@@ -7,6 +7,7 @@ import {
   KERNAL_ROM_SIZE,
   VIC_FRAMEBUFFER_HEIGHT,
   VIC_FRAMEBUFFER_WIDTH,
+  VicGraphicsMode,
   type C64RomKind
 } from './core';
 
@@ -25,7 +26,7 @@ app.innerHTML = `
     <header>
       <p class="eyebrow">FROM-SCRATCH C64 EMULATOR</p>
       <h1>Commodore 64 Development Console</h1>
-      <p>v0.5 — cycle-steppable 6510, MOS 6526 CIAs, VIC-II text output, and bad-line BA/AEC arbitration.</p>
+      <p>v0.6 — timed VIC-II fetch pipeline, all legal graphics modes, hardware sprites, and shared BA/AEC arbitration.</p>
     </header>
 
     <article class="panel rom-panel">
@@ -58,7 +59,7 @@ app.innerHTML = `
       <div class="panel-heading">
         <div>
           <h2>VIC-II display</h2>
-          <p>Standard 40×25 hires text mode. The framebuffer is color-indexed inside the emulator core.</p>
+          <p>Live VIC-II framebuffer: text, bitmap, multicolor, ECM, sprites, priority, and collisions.</p>
         </div>
         <div id="vic-position" class="status-pill"></div>
       </div>
@@ -272,9 +273,18 @@ function render(): void {
     `BA            ${vic.baHigh ? 'HIGH' : 'LOW'}`,
     `AEC           ${vic.aecHigh ? 'HIGH' : 'LOW'}`,
     `C-ACCESSES    ${vic.cAccessesThisFrame}`,
+    `G-ACCESSES    ${vic.gAccessesThisFrame}`,
+    `SPR DATA      ${vic.spriteDataAccessesThisFrame}`,
+    `MODE          ${graphicsModeName(vic.graphicsMode)}`,
+    `VC / VCBASE   $${hex(vic.videoCounter, 3)} / $${hex(vic.videoCounterBase, 3)}`,
+    `RC / VMLI     ${vic.rowCounter} / ${vic.videoMatrixLineIndex}`,
+    `DISPLAY       ${vic.displayState ? 'active' : 'idle'}`,
+    `SP-SP COLL    $${hex(vic.spriteSpriteCollisionBits, 2)}`,
+    `SP-BG COLL    $${hex(vic.spriteBackgroundCollisionBits, 2)}`,
     `FRAME         ${vic.frameNumber}`,
     `SCREEN        +$${hex(vic.screenMemoryOffset, 4)}`,
-    `CHARS         +$${hex(vic.characterMemoryOffset, 4)}`
+    `CHARS         +$${hex(vic.characterMemoryOffset, 4)}`,
+    `BITMAP        +$${hex(vic.bitmapMemoryOffset, 4)}`
   ].join('\n');
 
   vicPositionElement.textContent = `${vic.timing.chip} · line ${vic.rasterLine} · cycle ${vic.rasterCycle}`;
@@ -346,6 +356,17 @@ function romInput(kind: C64RomKind, label: string, size: number): string {
       <em id="status-${kind}">Not loaded</em>
     </label>
   `;
+}
+
+function graphicsModeName(mode: VicGraphicsMode): string {
+  switch (mode) {
+    case VicGraphicsMode.STANDARD_TEXT: return 'standard text';
+    case VicGraphicsMode.MULTICOLOR_TEXT: return 'multicolor text';
+    case VicGraphicsMode.STANDARD_BITMAP: return 'standard bitmap';
+    case VicGraphicsMode.MULTICOLOR_BITMAP: return 'multicolor bitmap';
+    case VicGraphicsMode.EXTENDED_COLOR_TEXT: return 'ECM text';
+    default: return `illegal (${mode})`;
+  }
 }
 
 function bit(value: boolean): string {

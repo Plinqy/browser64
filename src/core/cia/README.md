@@ -35,7 +35,7 @@ PRA/PRB output latches are combined with DDRA/DDRB and external input-provider c
 
 Timer A and Timer B have independent 16-bit latches/counters. They support PHI2 counting, CNT counting, Timer-B chaining from Timer-A underflows, continuous/one-shot mode, force-load strobes, and PB6/PB7 pulse/toggle output. A counter underflows after reaching zero, then reloads from its latch.
 
-`tick(n)` advances PHI2 time explicitly. As of v0.5, `C64Machine.tickSystemCycle()` advances both CIAs one shared system cycle at a time alongside an individual 6510 bus micro-cycle. CIA timers therefore continue to count while VIC-II stalls the CPU on bad lines. More obscure 6526 edge timing remains a future compatibility area, but instruction-atomic CPU replay is no longer a scheduler limitation.
+`tick(n)` advances PHI2 time explicitly. As of v0.6, `C64Machine.tickSystemCycle()` advances both CIAs one shared system cycle at a time alongside an individual 6510 bus micro-cycle. CIA timers therefore continue to count while VIC-II stalls the CPU on bad lines. More obscure 6526 edge timing remains a future compatibility area, but instruction-atomic CPU replay is no longer a scheduler limitation.
 
 ### Interrupt controller
 

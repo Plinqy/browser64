@@ -2,7 +2,7 @@
 
 ## Overview
 
-This directory owns CPU-visible device routing for the `$D000-$DFFF` C64 I/O window. As of v0.5 the VIC-II and both CIA regions contain functional device models. SID remains an explicit register-file placeholder. Color RAM is dedicated 4-bit memory rather than a normal chip register bank.
+This directory owns CPU-visible device routing for the `$D000-$DFFF` C64 I/O window. As of v0.6 the VIC-II and both CIA regions contain functional device models. SID remains an explicit register-file placeholder. Color RAM is dedicated 4-bit memory rather than a normal chip register bank.
 
 ## Architecture
 
