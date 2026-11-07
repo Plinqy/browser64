@@ -2,63 +2,67 @@
 
 ## Overview
 
-`C64Machine` is the composition root for a stock Commodore 64. It owns the CPU, bus, VIC-II, both CIA chips, debugger interfaces, interrupt wiring, and the master system clock.
+`C64Machine` is the composition root for a stock Commodore 64. It owns the CPU, bus, VIC-II, SID, both CIA chips, debugger interfaces, interrupt wiring, the master system clock, and the machine-level operations a host needs for ROM startup, joystick state, RESTORE, and PRG loading.
 
-The master clock remains the actual execution boundary in v0.6. The expanded VIC-II now contributes both bad-line and sprite DMA BA/AEC requests, while its c/g fetch sequencer generates display pixels on the same raster timeline.
+The browser is responsible for wall-clock pacing and host-event translation; the machine remains deterministic.
 
 ## Architecture
 
 ```text
-                 one system cycle
-                       |
-                       v
-                 +-----------+
-                 | C64Machine|
-                 +-----+-----+
-                       |
-          sample VIC BA / AEC
-                       |
-              +--------+--------+
-              |                 |
-              v                 v
-        Cpu6510.clock()       VIC-II
-              |               /   \
-              |          c/g fetch  sprites
-              |                 |
-              |               CIAs
-              |                 |
-              +------ C64Bus ---+
+             host requests / physical inputs
+                         |
+                         v
+                   +-----------+
+                   | C64Machine|
+                   +-----+-----+
+                         |
+            one master system cycle
+                         |
+             +-----------+-----------+
+             |                       |
+        Cpu6510.clock()           VIC-II
+             |                    /   \
+             |               c/g fetch  sprites
+             |                       |
+             +--------- C64Bus ------+
+                         |
+                    SID / CIA1 / CIA2
+                         |
+              keyboard / joysticks
 ```
 
-CIA1 and VIC-II share the 6510 IRQ line. CIA2 assertion is edge-converted to NMI. VIC memory remains independent of CPU memory banking.
+CIA1 and VIC-II share the 6510 IRQ line. CIA2 assertion is edge-converted to NMI. RESTORE supplies an independent NMI edge. VIC memory remains independent of CPU memory banking.
 
 ## Implementation Discussion
 
 ### Master system cycle
 
-`tickSystemCycle()` advances a complete C64 system cycle:
+`tickSystemCycle()` advances a complete C64 system cycle: synchronize interrupt inputs, sample VIC BA/AEC, offer one bus cycle to the 6510, advance VIC/SID/CIAs, increment the master clock, and synchronize newly generated interrupt state.
 
-1. synchronize IRQ/NMI inputs,
-2. sample the VIC's combined bad-line/sprite BA and AEC levels,
-3. offer one micro-cycle to the 6510,
-4. advance VIC-II and both CIAs by one system cycle,
-5. increment the master cycle counter,
-6. synchronize newly generated interrupts for the next CPU cycle.
+`step()` remains an instruction-granular wrapper and `runFrame()` advances whole instructions until the VIC enters its next frame.
 
-The returned `C64SystemCycleResult` reports the CPU-cycle result and the BA/AEC levels that governed that cycle.
+### Real-time execution
 
-### VIC stalls
+There is intentionally no `setInterval`, `performance.now()`, or frame-rate logic in this class. Browser code computes the VIC profile's frame duration and calls `runFrame()` as needed. This preserves deterministic tests and makes future headless execution possible.
 
-The CPU receives VIC BA as its RDY input. A BA-low read cycle is frozen without incrementing `cpu.cycles`; a pending write can still complete while BA is low. Once AEC is low, the CPU cannot advance any bus cycle.
+### Reset and ROM startup
 
-`masterCycles` always advances because the motherboard clock continues even while the CPU is stunned. `cpuStallCycles` counts system cycles on which the CPU attempted but could not advance.
+Power-on clears deterministic RAM, asserts the modeled chip reset paths, and lets `Cpu6510.reset()` read the real KERNAL reset vector at `$FFFC/$FFFD`. No KERNAL routine is bypassed. Warm reset preserves RAM and physical input state while resetting processor/I/O control state. Individual chips retain any internal state that their reset pin does not physically clear; for SID this includes oscillator phase and envelope counter state.
 
-Bad-line DMA and sprite DMA now use the same arbitration path. Exact half-cycle sprite p/s access sequencing is still a VIC-local future refinement; no second scheduler or special CPU shortcut is introduced for sprites.
+### NMI sources
 
-### Instruction stepping
+CIA2's interrupt output and RESTORE are separate sources on the NMI path. CIA2 is edge-detected by the machine. `setRestorePressed()` separately detects the key's press edge and calls `pulseNmi()`; holding RESTORE does not repeatedly retrigger NMI.
 
-`C64Machine.step()` repeatedly calls `tickSystemCycle()` until one CPU instruction or interrupt sequence finishes. Its return value is **elapsed system cycles**, including VIC-induced stalls. On a bus-free line this equals the instruction's documented CPU cycle count.
+### Joysticks
 
-### Reset
+`setJoystickControl()` delegates named directions/fire to `C64Io`, which converts them to active-low CIA1 port pins. The host does not write CIA registers directly.
 
-`Cpu6510.reset()` establishes the reset-vector state atomically and returns seven reset cycles. `C64Machine` advances VIC/CIA time through those seven cycles without executing normal instruction micro-operations.
+### PRG loading
+
+`loadPrg()` parses a two-byte little-endian load address, copies payload bytes into physical RAM, and returns load metadata. When the address is `$0801`, it can update BASIC's `TXTTAB`, `VARTAB`, `ARYTAB`, and `STREND` pointers. It does not assume the load address is executable.
+
+`startAt()` is the explicit debugger/host escape hatch for machine-code files whose entry point is known. It deliberately discards any partially scheduled CPU instruction before changing PC.
+
+### SID timing
+
+The SID is owned by `C64Io` and advances during every `tickSystemCycle()`, including cycles where VIC BA/AEC stalls the 6510. This matches the physical SID PHI2 relationship and keeps oscillator/envelope timing independent from CPU bus availability. Browser audio drains SID-produced PCM separately and never drives machine time.

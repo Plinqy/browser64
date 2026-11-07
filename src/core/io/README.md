@@ -2,14 +2,14 @@
 
 ## Overview
 
-This directory owns CPU-visible device routing for the `$D000-$DFFF` C64 I/O window. As of v0.6 the VIC-II and both CIA regions contain functional device models. SID remains an explicit register-file placeholder. Color RAM is dedicated 4-bit memory rather than a normal chip register bank.
+This directory owns CPU-visible device routing for the `$D000-$DFFF` C64 I/O window. As of v0.8 the VIC-II, SID, and both CIA regions contain functional device models. Color RAM is dedicated 4-bit memory rather than a normal chip register bank.
 
 ## Architecture
 
 `C64Io` divides the 4 KiB I/O window into the stock regions:
 
 - `$D000-$D3FF` — VIC-II, registers mirrored every `$40`
-- `$D400-$D7FF` — SID, 32-register placeholder mirrored every `$20`
+- `$D400-$D7FF` — SID, 32 registers mirrored every `$20`
 - `$D800-$DBFF` — 1 KiB color RAM
 - `$DC00-$DCFF` — CIA #1, 16 registers mirrored every `$10`
 - `$DD00-$DDFF` — CIA #2, 16 registers mirrored every `$10`
@@ -22,9 +22,11 @@ Every device implements `MemoryMappedDevice`, keeping normal reads distinct from
 
 The VIC-II receives a `VicMemory` provider from `C64Bus`; it does not read through the CPU-visible I/O router. This prevents the common emulator mistake of making VIC fetches obey CPU CHAREN/BASIC/KERNAL banking.
 
-`C64Io.tick()` advances VIC-II and both CIAs. `C64Machine` invokes it one system cycle at a time so all timed I/O shares the master clock.
+`C64Io.tick()` advances VIC-II, SID, and both CIAs. `C64Machine` invokes it one system cycle at a time so all timed I/O shares the master clock.
 
-CIA1 remains wired to the keyboard matrix and active-low joystick pin images. CIA2 Port A bits 0-1 select the VIC bank through the real inverted mapping. IEC electrical behavior remains deferred.
+The SID runs at the VIC/system timing profile clock, so every master system cycle advances oscillator, envelope, and filter state even when the 6510 is stalled by VIC DMA.
+
+CIA1 remains wired to the keyboard matrix and active-low joystick pin images. v0.7 adds named up/down/left/right/fire setters for both joystick ports; those setters only manipulate the external active-low pin image and do not bypass CIA DDR/port resolution. CIA2 Port A bits 0-1 select the VIC bank through the real inverted mapping. IEC electrical behavior remains deferred.
 
 Color RAM stores only its low four bits and survives reset because it is RAM. Deterministic cold power-on clears it. Until an open-bus model exists, its undefined high nibble reads as `$F`.
 

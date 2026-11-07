@@ -41,6 +41,41 @@ describe('C64Machine', () => {
   });
 });
 
+describe('C64Machine PRG loading', () => {
+  it('loads a BASIC PRG into physical RAM and updates BASIC boundaries', () => {
+    const machine = new C64Machine();
+    const prg = Uint8Array.of(0x01, 0x08, 0x0b, 0x08, 0x0a, 0x00, 0x99, 0x00, 0x00, 0x00);
+
+    const result = machine.loadPrg(prg);
+
+    expect(result.loadAddress).toBe(0x0801);
+    expect(result.endAddressExclusive).toBe(0x0809);
+    expect(result.basicPointersInitialized).toBe(true);
+    expect(machine.bus.readPhysicalRam(0x0801)).toBe(0x0b);
+    expect(machine.bus.readPhysicalRam(0x002b)).toBe(0x01);
+    expect(machine.bus.readPhysicalRam(0x002c)).toBe(0x08);
+    expect(machine.bus.readPhysicalRam(0x002d)).toBe(0x09);
+    expect(machine.bus.readPhysicalRam(0x002e)).toBe(0x08);
+    expect(machine.bus.readPhysicalRam(0x002f)).toBe(0x09);
+    expect(machine.bus.readPhysicalRam(0x0031)).toBe(0x09);
+  });
+
+  it('leaves BASIC pointers alone for a non-BASIC load and can jump explicitly', () => {
+    const machine = new C64Machine();
+    machine.bus.writePhysicalRam(0x002d, 0xaa);
+    machine.bus.writePhysicalRam(0x002e, 0xbb);
+
+    const result = machine.loadPrg(Uint8Array.of(0x00, 0xc0, 0xea, 0x60));
+    expect(result.basicPointersInitialized).toBe(false);
+    expect(machine.bus.readPhysicalRam(0xc000)).toBe(0xea);
+    expect(machine.bus.readPhysicalRam(0x002d)).toBe(0xaa);
+    expect(machine.bus.readPhysicalRam(0x002e)).toBe(0xbb);
+
+    machine.startAt(result.loadAddress);
+    expect(machine.cpu.pc).toBe(0xc000);
+  });
+});
+
 describe('C64Machine CIA integration', () => {
   function kernalWithVectors(reset: number, nmi: number, irq: number): Uint8Array {
     const kernal = new Uint8Array(KERNAL_ROM_SIZE).fill(0xea);
@@ -98,11 +133,29 @@ describe('C64Machine CIA integration', () => {
     machine.powerOn();
 
     machine.bus.io.cia2.write(0x0d, 0x90); // enable FLAG interrupt
-    machine.setRestorePressed(true);
+    machine.bus.io.cia2.setFlagLine(false);
     expect(machine.bus.io.cia2.irqAsserted).toBe(true);
 
     machine.step();
     expect(machine.cpu.pc).toBe(0xe100);
+  });
+
+  it('delivers RESTORE directly as a separate NMI source', () => {
+    const machine = new C64Machine();
+    const kernal = kernalWithVectors(0xe000, 0xe100, 0xe200);
+    machine.loadRom('kernal', kernal);
+    machine.powerOn();
+
+    machine.setRestorePressed(true);
+    expect(machine.bus.io.cia2.irqAsserted).toBe(false);
+
+    machine.step();
+    expect(machine.cpu.pc).toBe(0xe100);
+
+    // Holding RESTORE is not a second edge.
+    machine.setRestorePressed(true);
+    machine.step();
+    expect(machine.cpu.pc).toBe(0xe101);
   });
 });
 
@@ -237,5 +290,22 @@ describe('C64Machine sprite DMA arbitration', () => {
 
     machine.tickSystemCycle();
     expect(machine.cpu.cycles).toBe(cpuBefore + 1);
+  });
+});
+
+describe('C64Machine SID integration', () => {
+  it('clocks the SID once for every master system cycle, including normal CPU execution', () => {
+    const machine = new C64Machine();
+    machine.loadRom('kernal', kernalWithResetVector(0xe000));
+    machine.powerOn();
+
+    machine.bus.write(0xd400, 0x34);
+    machine.bus.write(0xd401, 0x12);
+    const before = machine.bus.io.sid.voices[0].oscillator.accumulator;
+
+    for (let cycle = 0; cycle < 10; cycle += 1) machine.tickSystemCycle();
+
+    expect(machine.bus.io.sid.voices[0].oscillator.accumulator)
+      .toBe((before + 10 * 0x1234) & 0x00ff_ffff);
   });
 });

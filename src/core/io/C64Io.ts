@@ -1,20 +1,32 @@
 import { Cia6526 } from '../cia/Cia6526';
 import { KeyboardMatrix } from '../cia/KeyboardMatrix';
+import { Sid } from '../sid/Sid';
 import { VicII, type VicMemory } from '../vic/VicII';
 import { ColorRam } from './ColorRam';
 import type { MemoryMappedDevice } from './Device';
 import { OpenBusDevice } from './OpenBusDevice';
-import { RegisterFileDevice } from './RegisterFileDevice';
+
+export type JoystickPort = 1 | 2;
+export type JoystickControl = 'up' | 'down' | 'left' | 'right' | 'fire';
+
+const JOYSTICK_MASK: Readonly<Record<JoystickControl, number>> = Object.freeze({
+  up: 0x01,
+  down: 0x02,
+  left: 0x04,
+  right: 0x08,
+  fire: 0x10
+});
 
 /**
  * Routes CPU accesses inside the C64's $D000-$DFFF I/O window.
  *
- * v0.6 uses the timed graphics/sprite VIC-II device while
- * SID remains an explicit register-file placeholder until its later phase.
+ * v0.8 combines the timed VIC-II/CIAs with a cycle-clocked 6581/8580 SID.
+ * SID register mirrors therefore reach the real synthesizer instead of a
+ * passive register file.
  */
 export class C64Io implements MemoryMappedDevice {
   public readonly vic: VicII;
-  public readonly sid = new RegisterFileDevice(0x20, 0x1f);
+  public readonly sid: Sid;
   public readonly colorRam = new ColorRam();
   public readonly cia1 = new Cia6526();
   public readonly cia2 = new Cia6526();
@@ -27,6 +39,7 @@ export class C64Io implements MemoryMappedDevice {
 
   constructor(vicMemory?: VicMemory) {
     this.vic = new VicII(vicMemory);
+    this.sid = new Sid('6581', this.vic.timing.systemClockHz);
 
     // CIA1 Port A normally drives keyboard columns and shares pins with
     // joystick 2. Port B normally reads rows and shares pins with joystick 1.
@@ -71,8 +84,32 @@ export class C64Io implements MemoryMappedDevice {
 
   tick(cycles: number): void {
     this.vic.tick(cycles);
+    this.sid.tick(cycles);
     this.cia1.tick(cycles);
     this.cia2.tick(cycles);
+  }
+
+  /** Set one active-low joystick switch on control port 1 or 2. */
+  setJoystickControl(port: JoystickPort, control: JoystickControl, pressed: boolean): void {
+    const mask = JOYSTICK_MASK[control];
+    if (port === 1) {
+      this.joystick1Pins = pressed
+        ? this.joystick1Pins & ~mask
+        : this.joystick1Pins | mask;
+      this.joystick1Pins &= 0xff;
+      return;
+    }
+
+    this.joystick2Pins = pressed
+      ? this.joystick2Pins & ~mask
+      : this.joystick2Pins | mask;
+    this.joystick2Pins &= 0xff;
+  }
+
+  /** Release all five switches on both control ports. */
+  releaseJoysticks(): void {
+    this.joystick1Pins = 0xff;
+    this.joystick2Pins = 0xff;
   }
 
   /** Active-low CIA pin image for joystick port 1. */

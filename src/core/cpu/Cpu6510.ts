@@ -103,6 +103,16 @@ export class Cpu6510 {
     this.nmiPending = true;
   }
 
+  /**
+   * Force the next instruction fetch to a host/debugger-selected address.
+   * Any partially scheduled instruction is discarded intentionally.
+   */
+  setProgramCounter(address: number): void {
+    this.pc = address & 0xffff;
+    this.microOps = [];
+    this.instructionActive = false;
+  }
+
   getFlag(flag: Flag): boolean {
     return (this.status & flag) !== 0;
   }

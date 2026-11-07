@@ -115,3 +115,68 @@ pre { margin: 0; font: 14px/1.55 "SFMono-Regular", Consolas, "Liberation Mono", 
   image-rendering: crisp-edges;
   box-shadow: 0 0 0 1px #000;
 }
+
+.input-toolbar,
+.program-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  margin-top: 14px;
+}
+.input-toolbar label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #b8b8c8;
+  font-size: 0.86rem;
+}
+.input-toolbar select {
+  border: 1px solid #4b4b60;
+  border-radius: 7px;
+  padding: 7px 9px;
+  color: #e9e9f2;
+  background: #222231;
+}
+#input-status { color: #9393a7; font-size: 0.82rem; }
+#vic-screen:focus { outline: 2px solid #8d8dff; outline-offset: 4px; }
+
+.program-panel { margin-bottom: 16px; transition: border-color 120ms ease, background 120ms ease; }
+.program-panel.drop-active { border-color: #7878a8; background: #1d1d2a; }
+.program-controls input { min-width: min(360px, 100%); color: #bdbdcb; }
+.program-controls button {
+  border: 1px solid #4b4b60;
+  border-radius: 8px;
+  padding: 9px 14px;
+  color: inherit;
+  background: #222231;
+  cursor: pointer;
+}
+.program-controls button:hover:not(:disabled) { background: #2d2d40; }
+.program-controls button:disabled { opacity: 0.42; cursor: not-allowed; }
+
+.sid-panel { margin-bottom: 16px; }
+.sid-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin-top: 14px;
+}
+.sid-controls label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #b8b8c8;
+  font-size: 0.86rem;
+}
+.sid-controls select,
+.sid-controls button {
+  border: 1px solid #4b4b60;
+  border-radius: 8px;
+  padding: 8px 11px;
+  color: #e9e9f2;
+  background: #222231;
+}
+.sid-controls button { cursor: pointer; }
+.sid-controls button:hover { background: #2d2d40; }

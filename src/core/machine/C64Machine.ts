@@ -1,7 +1,9 @@
 import { Cpu6510, type CpuClockResult } from '../cpu/Cpu6510';
 import { Disassembler } from '../debugger/Disassembler';
 import { TraceFormatter } from '../debugger/TraceFormatter';
+import type { JoystickControl, JoystickPort } from '../io/C64Io';
 import { C64Bus } from '../memory/C64Bus';
+import { parsePrg, type PrgLoadResult } from '../program/Prg';
 import type { C64RomKind } from '../rom/RomSet';
 
 export interface C64SystemCycleResult {
@@ -17,7 +19,7 @@ export interface C64SystemCycleResult {
 /**
  * Top-level composition root for one stock Commodore 64.
  *
- * v0.5 makes the system cycle the actual execution boundary. Each master tick
+ * The system cycle is the actual execution boundary. Each master tick
  * samples VIC-II BA/AEC, advances one 6510 micro-cycle when permitted, advances
  * VIC/CIA time once, and then resynchronizes interrupt lines.
  */
@@ -28,6 +30,7 @@ export class C64Machine {
   public readonly trace = new TraceFormatter(this.cpu);
 
   private cia2IrqWasAsserted = false;
+  private restorePressed = false;
   private masterCycleCounter = 0;
   private cpuStallCounter = 0;
 
@@ -45,6 +48,7 @@ export class C64Machine {
     this.bus.resetIo();
     this.bus.io.colorRam.clear();
     this.cia2IrqWasAsserted = false;
+    this.restorePressed = false;
     this.masterCycleCounter = 0;
     this.cpuStallCounter = 0;
     const cycles = this.cpu.reset();
@@ -60,6 +64,7 @@ export class C64Machine {
     this.bus.resetProcessorPort();
     this.bus.resetIo();
     this.cia2IrqWasAsserted = false;
+    this.restorePressed = false;
     this.masterCycleCounter = 0;
     this.cpuStallCounter = 0;
     const cycles = this.cpu.reset();
@@ -128,10 +133,48 @@ export class C64Machine {
     return this.run(maxInstructions, (machine) => machine.bus.io.vic.frameNumber !== startingFrame);
   }
 
-  /** RESTORE is connected to CIA2 FLAG, whose enabled interrupt output drives NMI. */
+  /**
+   * RESTORE is a separate active-low NMI source on the C64 motherboard.
+   * Only the press edge creates an NMI; holding the key does not retrigger it.
+   */
   setRestorePressed(pressed: boolean): void {
-    this.bus.io.cia2.setFlagLine(!pressed);
-    this.syncInterruptLines();
+    if (pressed && !this.restorePressed) {
+      this.cpu.pulseNmi();
+    }
+    this.restorePressed = pressed;
+  }
+
+  setJoystickControl(port: JoystickPort, control: JoystickControl, pressed: boolean): void {
+    this.bus.io.setJoystickControl(port, control, pressed);
+  }
+
+  /**
+   * Load a PRG into physical RAM. A normal BASIC PRG at $0801 also refreshes
+   * BASIC's text/variable boundary pointers so LIST/RUN can consume it.
+   */
+  loadPrg(bytes: ArrayLike<number>, initializeBasicPointers = true): PrgLoadResult {
+    const parsed = parsePrg(bytes);
+    this.bus.loadRam(parsed.payload, parsed.loadAddress);
+
+    const initializeBasic = initializeBasicPointers && parsed.loadAddress === 0x0801;
+    if (initializeBasic) {
+      this.writeWordToRam(0x002b, parsed.loadAddress); // TXTTAB
+      this.writeWordToRam(0x002d, parsed.endAddressExclusive); // VARTAB
+      this.writeWordToRam(0x002f, parsed.endAddressExclusive); // ARYTAB
+      this.writeWordToRam(0x0031, parsed.endAddressExclusive); // STREND
+    }
+
+    return {
+      loadAddress: parsed.loadAddress,
+      endAddressExclusive: parsed.endAddressExclusive,
+      byteLength: parsed.payload.length,
+      basicPointersInitialized: initializeBasic
+    };
+  }
+
+  /** Explicit host/debugger launch point for a machine-code PRG. */
+  startAt(address: number): void {
+    this.cpu.setProgramCounter(address);
   }
 
   /** Supply one external 50/60 Hz TOD pulse to both motherboard CIAs. */
@@ -155,6 +198,11 @@ export class C64Machine {
       this.masterCycleCounter += 1;
       this.syncInterruptLines();
     }
+  }
+
+  private writeWordToRam(address: number, value: number): void {
+    this.bus.writePhysicalRam(address, value & 0xff);
+    this.bus.writePhysicalRam(address + 1, (value >> 8) & 0xff);
   }
 
   private syncInterruptLines(): void {

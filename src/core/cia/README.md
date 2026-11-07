@@ -23,7 +23,7 @@ CIA2 IRQ -- rising assertion ---> 6510 NMI edge
 
 `Cia6526` is a reusable chip model. It does not contain C64-specific knowledge about which keys, joystick ports, IEC signals, or VIC bank lines are connected to its pins. C64-specific wiring belongs to `C64Io` and `C64Machine`.
 
-The keyboard model stores physical `(column,row)` switch closures. Host/browser key names are deliberately absent from the core; a later input adapter can map `KeyboardEvent.code` values to matrix coordinates without making the chip model depend on the DOM.
+The keyboard model stores physical `(column,row)` switch closures. Host/browser key names remain absent from the core. v0.7 adds that translation in `src/input/HostInputController.ts`, outside `src/core`, so the CIA and keyboard matrix still have no DOM dependency.
 
 ## Implementation Discussion
 
@@ -35,7 +35,7 @@ PRA/PRB output latches are combined with DDRA/DDRB and external input-provider c
 
 Timer A and Timer B have independent 16-bit latches/counters. They support PHI2 counting, CNT counting, Timer-B chaining from Timer-A underflows, continuous/one-shot mode, force-load strobes, and PB6/PB7 pulse/toggle output. A counter underflows after reaching zero, then reloads from its latch.
 
-`tick(n)` advances PHI2 time explicitly. As of v0.6, `C64Machine.tickSystemCycle()` advances both CIAs one shared system cycle at a time alongside an individual 6510 bus micro-cycle. CIA timers therefore continue to count while VIC-II stalls the CPU on bad lines. More obscure 6526 edge timing remains a future compatibility area, but instruction-atomic CPU replay is no longer a scheduler limitation.
+`tick(n)` advances PHI2 time explicitly. As of v0.7, `C64Machine.tickSystemCycle()` advances both CIAs one shared system cycle at a time alongside an individual 6510 bus micro-cycle. CIA timers therefore continue to count while VIC-II stalls the CPU on bad lines. More obscure 6526 edge timing remains a future compatibility area, but instruction-atomic CPU replay is no longer a scheduler limitation.
 
 ### Interrupt controller
 
@@ -56,3 +56,7 @@ The SDR register and serial-input path are modeled: rising CNT edges shift SP in
 ### Verification strategy
 
 CIA tests cover reset state, DDR/port resolution, timer reload/one-shot behavior, Timer-B cascading, mask/ICR semantics, FLAG, CNT, TOD latching/alarm, serial input, keyboard scanning, mirrored C64 addresses, CIA2 VIC bank selection, and machine-level IRQ/NMI delivery. Later compatibility work should add the Lorenz/VICE CIA suites rather than weakening these focused unit tests.
+
+### RESTORE wiring
+
+RESTORE is not a CIA FLAG input. v0.7 models it as a separate motherboard NMI source in `C64Machine`; CIA2 interrupts continue to reach NMI independently through CIA2's own interrupt output.

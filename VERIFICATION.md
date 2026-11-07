@@ -1,137 +1,96 @@
-# Verification — v0.6
+# v0.8 Verification
 
-This file records verification performed while preparing the combined v0.6 VIC-II fetch/render + graphics/sprite patch.
+Version 0.8 adds the MOS 6581/8580 SID core and the browser AudioWorklet output path while keeping Web Audio outside the deterministic emulator core.
 
-## Scope
+## Research and implementation boundary
 
-v0.6 intentionally combines the two planned VIC-II phases:
+The SID implementation was cross-checked against the MOS SID register model, historic hardware measurements, modern reSID/reSIDfp behavioral documentation/source, VICE/libresidfp regression tests, die-informed DAC/filter findings, and current Web Audio/AudioWorklet documentation.
 
-1. timed display-memory sequencing and live raster-fed pixel generation,
-2. legal graphics modes plus the eight-sprite engine.
+No reSID/reSIDfp source code, measured combined-waveform tables, or other GPL lookup data are copied into this project. The implementation is original. In particular:
 
-The major implementation changes are confined to the VIC-II core, its browser/debug presentation, documentation, and tests. The verified v0.5 `Cpu6510` implementation is unchanged.
+- 6581 envelope/waveform DAC tables are generated from an independently solved R-2R ladder (`2R/R ~= 2.2`, missing LSB termination).
+- 8580 DACs use the ideal terminated `2R/R ~= 2.0` model.
+- combined waveforms use an original algorithmic coupling approximation rather than third-party measured tables.
+- the 6581 filter uses a representative nonlinear cutoff curve and simplified state-variable analog model; it is not claimed to reproduce every physical 6581 revision.
 
-## Strict TypeScript
+The project documentation explicitly identifies those analog limits rather than presenting them as sample-exact behavior.
 
-The complete source and test tree was checked under the project's strict TypeScript settings:
+## Digital SID behavior covered
 
-- `strict`
-- `noUncheckedIndexedAccess`
-- `exactOptionalPropertyTypes`
-- `noFallthroughCasesInSwitch`
-- `noImplicitOverride`
-- `noUnusedLocals`
-- `noUnusedParameters`
+The v0.8 core implements and tests:
 
-The sandbox cannot complete `npm install`, so temporary local declaration shims for Vitest, Vite's CSS module declarations, and the small Node APIs used by the optional Klaus test were used only for verification. They are removed before packaging and are not part of the patch.
+- three independent voices and the real 24-bit phase-accumulator frequency path
+- triangle, saw, pulse, and 23-bit LFSR noise
+- pulse comparator pipeline
+- bit-19 noise clock pipeline
+- oscillator synchronization and chained-sync exception
+- triangle ring modulation
+- TEST phase hold and modeled slow noise-register reset behavior
+- combined waveform interaction and destructive noise write-back approximation
+- cycle-clocked 15-bit ADSR rate LFSR and exponential divider
+- ADSR delay behavior
+- `$FF->$00` and `$00->$FF` envelope boundary behaviors
+- patterned SID power-up state and reset preservation of oscillator phase/envelope counter state
+- 6581 non-monotonic DAC transfer behavior
+- 8580 near-ideal DAC transfer behavior
+- per-source filter routing, LP/BP/HP modes, resonance, V3OFF, EXT IN, and master volume
+- 8580 exponential resonance ladder law
+- representative nonlinear 6581 cutoff/resonance behavior
+- C64 output RC path (approximately 16 kHz LP and 1.6 Hz high-pass/DC block)
+- POTX/POTY, OSC3, and ENV3 reads
+- write-only-register floating bus reads with model-specific decay windows
+- one-cycle 8580 write pipeline
+- PAL/NTSC clock plumbing
+- deterministic PCM generation independent of the browser audio clock
 
-Result: **PASS**.
+## Static verification
 
-## Compiled unit-test regression
+The complete source and test tree was type-checked in strict mode using the locally available TypeScript compiler plus verification-only ambient declarations for Vitest/Vite/Node packages and the Vite `?url` asset import. Those declarations are not part of the project or patch.
 
-All normal unit tests except the optional external-binary Klaus test were compiled to CommonJS and executed with a minimal verification runner implementing the Vitest assertions used by this repository.
+Result: **PASS**
 
-Result:
+The browser source is included in this type-check, including the SID model selector, AudioWorklet bridge, PCM transfer, mute/resume controls, and existing ROM/input/PRG runtime.
+
+The AudioWorklet source was also syntax-checked independently with Node's JavaScript parser.
+
+Result: **PASS**
+
+## Compiled regression
+
+All normal unit tests were compiled to a temporary CommonJS tree and executed through the verification-only Vitest-compatible assertion harness.
+
+Result before patch packaging:
 
 ```text
-112 passed
+147 passed
 0 failed
 ```
 
-This covers the pre-existing CPU, memory, ROM, debugger, CIA, I/O, machine, and VIC tests plus the new v0.6 suites.
+The optional Klaus Dormann CPU test is intentionally excluded from this count because `tests/assets/6502_functional_test.bin` is not redistributed with the project. The v0.8 CPU implementation itself is unchanged.
 
-The project's real `npm run test` remains the authoritative local check because the verification runner is intentionally not a replacement for Vitest itself.
+SID-specific coverage includes oscillator phase, hard sync, ring modulation, LFSR timing/published selector vectors, model-specific OSC3 timing, SID reset state, ADSR timing/LFSR phase/delay/boundary behavior, DAC discontinuities, filter routing/cutoff, bus decay, model-specific write timing, readable registers, deterministic PCM output, and machine-level one-SID-clock-per-master-cycle integration.
 
-## VIC memory sequencer assertions
+## Performance sanity check
 
-Focused tests verify:
+A standalone SID stress run with all three voices, envelopes, filter routing, and analog-output calculations completed 1,000,000 SID cycles in approximately 282 ms in this container (about 3.55 million SID cycles/second).
 
-- first default PAL bad line at raster 51 for YSCROLL=3,
-- 40 c-accesses feed the same line's 40 g-accesses,
-- VC advances across a 40-column display line,
-- VC resets from VCBASE for subsequent raster lines,
-- RC advances through the eight character rows,
-- VCBASE advances by 40 after the eighth row,
-- display state exits until the next bad line,
-- XSCROLL shifts generated display pixels.
+This is a performance sanity check, not a browser benchmark, but it provides sufficient headroom over the PAL C64 SID clock (~985 kHz) to keep the TypeScript implementation for this phase rather than prematurely moving the core to WebAssembly.
 
-Result: **PASS**.
+## Browser audio boundary
 
-## Graphics-mode assertions
+`Sid` remains entirely browser-independent. When audio is enabled it deterministically decimates emulated cycle-rate output into PCM. `SidAudio` transfers those samples to an `AudioWorkletProcessor`, which only acts as the browser playback sink. Web Audio does not advance or reschedule emulated SID state.
 
-Pixel-level tests verify all five documented VIC-II modes:
+Actual browser audio device behavior cannot be exercised headlessly in this container, so the user's local browser remains the final integration check for AudioContext autoplay policy, worklet loading, real device sample rate, and audible output.
 
-- standard text,
-- multicolor text,
-- standard bitmap,
-- multicolor bitmap,
-- ECM text.
+## Package-manager limitation
 
-The tests cover character/bitmap address selection, Color RAM use, screen-nibble colors, background registers, multicolor pair decoding, and ECM character/background selection.
+This execution environment does not have this project's real npm dependency tree installed and cannot reliably reach the npm registry. Therefore `npm run build` and the real Vitest executable cannot be run here.
 
-The illegal ECM combinations are also checked to produce black display data while the sequencer remains active.
-
-Result: **PASS**.
-
-## Sprite assertions
-
-Focused tests verify:
-
-- video-matrix sprite pointer lookup,
-- hires sprite decoding,
-- multicolor sprite decoding,
-- X expansion,
-- Y expansion source-row repetition,
-- fixed lower-numbered sprite priority,
-- sprite/background priority,
-- sprite-sprite collision latching,
-- sprite-background collision latching,
-- read-to-clear `$D01E/$D01F`,
-- collision IRQ assertion,
-- sprite BA/AEC request timing.
-
-Result: **PASS**.
-
-## Machine-level sprite DMA arbitration
-
-A KERNAL NOP stream is advanced to a non-bad raster line with only sprite 0 active. The PAL scheduler is checked for the single-sprite request window:
-
-- BA prevents a read-only CPU stream from progressing for five system cycles,
-- `cpuStallCycles` increases by five,
-- master time continues,
-- CPU execution resumes after the request window.
-
-This implements the 3-cycle BA warning plus two stolen PHI2 cycles for a single active sprite group. Contiguous sprite request windows merge naturally through the same BA/AEC logic.
-
-Result: **PASS**.
-
-## Previous-phase regression
-
-The normal v0.5 unit suites were included in the 112-test compiled regression and all passed.
-
-The v0.5 CPU source was also compared directly against the v0.6 tree and is unchanged, so the prior 151-opcode/755-case CPU differential verification remains applicable to this patch.
-
-## npm/Vitest limitation in this sandbox
-
-`npm install --ignore-scripts --no-audit --no-fund` was attempted and timed out because the sandbox cannot reliably reach the package registry. Therefore actual Vite/Vitest execution is not claimed here.
-
-Run after applying the patch on the development machine:
+After applying the patch locally, run:
 
 ```bash
-npm install
 npm run build
 npm run test
 ```
 
-The optional Klaus functional test remains available through `tests/cpu/KlausFunctional.test.ts` when `tests/assets/6502_functional_test.bin` is supplied. The binary is not redistributed.
-
-## Known accuracy boundary after v0.6
-
-v0.6 is a major VIC-II accuracy step, but it still does **not** claim complete dot/half-cycle accuracy:
-
-- sprite line data is staged at raster-line start while PAL BA/AEC request windows model CPU-visible DMA cost; individual half-cycle p/s accesses are not exposed separately,
-- border transitions are modeled at display-window/raster granularity rather than every dot-clock transition,
-- sprite crunch/expansion flip-flop tricks are not modeled,
-- light-pen and VIC open-bus behavior are not modeled,
-- NTSC sprite access placement is still a conservative derivative of the PAL schedule,
-- undocumented VIC-II quirks remain compatibility work.
+Expected normal Vitest count without the optional Klaus binary: **147 passing, 1 skipped**.

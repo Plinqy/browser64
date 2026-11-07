@@ -77,3 +77,7 @@ ADC and SBC retain the verified NMOS decimal behavior from earlier releases. In 
 ### Undocumented opcodes
 
 Undocumented NMOS opcodes remain intentionally unsupported. They throw `UnsupportedOpcodeError` rather than silently behaving as NOPs. They will be added as an explicit compatibility phase with dedicated timing tests.
+
+### Host/debugger launch point
+
+`setProgramCounter(address)` is an explicit host/debugger operation used by v0.7 machine-code PRG launching. It clears any partially scheduled micro-operations before changing PC; normal emulated control flow never uses this shortcut.

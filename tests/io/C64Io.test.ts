@@ -50,6 +50,25 @@ describe('C64Io address decoding', () => {
     expect(io.cia1.read(0x01)).toBe(0xee);
   });
 
+
+  it('updates active-low joystick pins through named controls', () => {
+    const io = new C64Io();
+
+    io.setJoystickControl(1, 'up', true);
+    io.setJoystickControl(1, 'fire', true);
+    io.setJoystickControl(2, 'left', true);
+
+    expect(io.joystick1InputPins).toBe(0xee);
+    expect(io.joystick2InputPins).toBe(0xfb);
+
+    io.setJoystickControl(1, 'up', false);
+    expect(io.joystick1InputPins).toBe(0xef);
+
+    io.releaseJoysticks();
+    expect(io.joystick1InputPins).toBe(0xff);
+    expect(io.joystick2InputPins).toBe(0xff);
+  });
+
   it('keeps expansion I/O areas open/unimplemented', () => {
     const io = new C64Io();
     io.write(0x0e00, 0x12);
