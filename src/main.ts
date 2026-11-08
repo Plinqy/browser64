@@ -13,6 +13,7 @@ import {
   type C64RomKind,
   type D64DirectoryEntry,
   type D64Image,
+  type MonitorStopReason,
   type SidChipModel
 } from './core';
 import { SidAudio } from './audio/SidAudio';
@@ -42,7 +43,7 @@ app.innerHTML = `
     <header>
       <p class="eyebrow">FROM-SCRATCH C64 EMULATOR</p>
       <h1>Commodore 64 Development Console</h1>
-      <p>v0.10 — D64 directory/file support and a physical open-collector serial IEC bus foundation.</p>
+      <p>v0.13 — advanced monitor tooling: breakpoints, watchpoints, raster stops, editable state, execution history, and bus/interrupt tracing.</p>
     </header>
 
     <article class="panel rom-panel">
@@ -178,6 +179,76 @@ app.innerHTML = `
       <h2>Trace</h2>
       <pre id="trace"></pre>
     </article>
+
+    <article class="panel monitor-panel">
+      <div class="panel-heading">
+        <div>
+          <h2>Machine Monitor</h2>
+          <p>Execution stops are observational: guest memory is never patched with trap opcodes. Watch/raster hits finish the current 6510 instruction before edits are allowed.</p>
+        </div>
+        <div id="monitor-status" class="status-pill">Monitor ready</div>
+      </div>
+
+      <div class="monitor-controls">
+        <fieldset>
+          <legend>Execution stops</legend>
+          <label>PC <input id="monitor-break-address" value="E000" maxlength="6" /></label>
+          <button id="monitor-add-break">Add PC breakpoint</button>
+          <label>Watch <input id="monitor-watch-address" value="0200" maxlength="6" /></label>
+          <select id="monitor-watch-mode">
+            <option value="readwrite">Read / write</option>
+            <option value="read">Read</option>
+            <option value="write">Write</option>
+          </select>
+          <button id="monitor-add-watch">Add watchpoint</button>
+          <label>Raster line <input id="monitor-raster-line" value="0" inputmode="numeric" /></label>
+          <label>cycle <input id="monitor-raster-cycle" placeholder="optional" inputmode="numeric" /></label>
+          <button id="monitor-add-raster">Add raster stop</button>
+          <label>ID <input id="monitor-remove-id" inputmode="numeric" /></label>
+          <button id="monitor-remove-break">Remove</button>
+          <button id="monitor-clear-breaks">Clear all</button>
+          <button id="monitor-continue">Continue</button>
+        </fieldset>
+
+        <fieldset>
+          <legend>CPU registers</legend>
+          <label>PC <input id="monitor-reg-pc" maxlength="6" /></label>
+          <label>A <input id="monitor-reg-a" maxlength="4" /></label>
+          <label>X <input id="monitor-reg-x" maxlength="4" /></label>
+          <label>Y <input id="monitor-reg-y" maxlength="4" /></label>
+          <label>SP <input id="monitor-reg-sp" maxlength="4" /></label>
+          <label>P <input id="monitor-reg-p" maxlength="4" /></label>
+          <button id="monitor-apply-registers">Apply registers</button>
+        </fieldset>
+
+        <fieldset>
+          <legend>Memory</legend>
+          <label>View <input id="monitor-memory-address" value="0400" maxlength="6" /></label>
+          <select id="monitor-memory-view">
+            <option value="mapped">CPU-mapped</option>
+            <option value="ram">Physical RAM</option>
+          </select>
+          <label>Write RAM <input id="monitor-write-address" value="0400" maxlength="6" /></label>
+          <label>= <input id="monitor-write-value" value="00" maxlength="4" /></label>
+          <button id="monitor-write-memory">Write byte</button>
+          <button id="monitor-clear-history">Clear histories</button>
+        </fieldset>
+      </div>
+
+      <pre id="monitor-breakpoints" class="monitor-breakpoints"></pre>
+      <div class="monitor-grid">
+        <section><h3>Memory dump</h3><pre id="monitor-memory"></pre></section>
+        <section><h3>Execution history</h3><pre id="monitor-history"></pre></section>
+        <section><h3>CPU / VIC bus trace</h3><pre id="monitor-bus-trace"></pre></section>
+        <section><h3>IRQ / NMI history</h3><pre id="monitor-interrupts"></pre></section>
+        <section><h3>Hardware snapshot</h3><pre id="monitor-hardware"></pre></section>
+        <section><h3>Screen memory</h3><pre id="monitor-screen"></pre></section>
+      </div>
+      <div class="monitor-timeline-wrap">
+        <h3>Raster / cycle access timeline</h3>
+        <canvas id="monitor-timeline" width="900" height="150" aria-label="Recent CPU and VIC bus accesses by raster position"></canvas>
+      </div>
+    </article>
   </section>
 `;
 
@@ -194,6 +265,16 @@ const prgStatusElement = mustElement('prg-status');
 const audioStatusElement = mustElement('audio-status');
 const d64StatusElement = mustElement('d64-status');
 const d64DirectoryElement = mustElement('d64-directory');
+const monitorStatusElement = mustElement('monitor-status');
+const monitorBreakpointsElement = mustElement('monitor-breakpoints');
+const monitorMemoryElement = mustElement('monitor-memory');
+const monitorHistoryElement = mustElement('monitor-history');
+const monitorBusTraceElement = mustElement('monitor-bus-trace');
+const monitorInterruptsElement = mustElement('monitor-interrupts');
+const monitorHardwareElement = mustElement('monitor-hardware');
+const monitorScreenElement = mustElement('monitor-screen');
+const monitorTimelineCanvas = mustCanvas('monitor-timeline');
+const monitorTimelineContext = must2dContext(monitorTimelineCanvas);
 const programPanel = mustElement('program-panel');
 const vicCanvas = mustCanvas('vic-screen');
 const vicContext = must2dContext(vicCanvas);
@@ -217,6 +298,32 @@ const joystickSelect = mustSelect('joystick-capture');
 const sidModelSelect = mustSelect('sid-model');
 const audioEnableButton = mustButton('audio-enable');
 const audioMuteButton = mustButton('audio-mute');
+
+const monitorBreakAddressInput = mustInput('monitor-break-address');
+const monitorAddBreakButton = mustButton('monitor-add-break');
+const monitorWatchAddressInput = mustInput('monitor-watch-address');
+const monitorWatchModeSelect = mustSelect('monitor-watch-mode');
+const monitorAddWatchButton = mustButton('monitor-add-watch');
+const monitorRasterLineInput = mustInput('monitor-raster-line');
+const monitorRasterCycleInput = mustInput('monitor-raster-cycle');
+const monitorAddRasterButton = mustButton('monitor-add-raster');
+const monitorRemoveIdInput = mustInput('monitor-remove-id');
+const monitorRemoveBreakButton = mustButton('monitor-remove-break');
+const monitorClearBreaksButton = mustButton('monitor-clear-breaks');
+const monitorContinueButton = mustButton('monitor-continue');
+const monitorRegisterPcInput = mustInput('monitor-reg-pc');
+const monitorRegisterAInput = mustInput('monitor-reg-a');
+const monitorRegisterXInput = mustInput('monitor-reg-x');
+const monitorRegisterYInput = mustInput('monitor-reg-y');
+const monitorRegisterSpInput = mustInput('monitor-reg-sp');
+const monitorRegisterPInput = mustInput('monitor-reg-p');
+const monitorApplyRegistersButton = mustButton('monitor-apply-registers');
+const monitorMemoryAddressInput = mustInput('monitor-memory-address');
+const monitorMemoryViewSelect = mustSelect('monitor-memory-view');
+const monitorWriteAddressInput = mustInput('monitor-write-address');
+const monitorWriteValueInput = mustInput('monitor-write-value');
+const monitorWriteMemoryButton = mustButton('monitor-write-memory');
+const monitorClearHistoryButton = mustButton('monitor-clear-history');
 
 const hostInput = new HostInputController(machine.bus.io.keyboard, {
   setRestorePressed: (pressed) => machine.setRestorePressed(pressed),
@@ -311,15 +418,22 @@ restoreButton.addEventListener('click', () => {
 });
 
 stepButton.addEventListener('click', () => {
+  machine.monitor.resume();
   doStep();
   render();
 });
 
 run100Button.addEventListener('click', () => {
-  for (let i = 0; i < 100 && poweredOn && lastError === ''; i += 1) {
-    doStep(false);
+  if (!poweredOn) return;
+  try {
+    machine.monitor.resume();
+    const executed = machine.run(100);
+    traceLines.push(`RUN ${executed} instruction${executed === 1 ? '' : 's'}${machine.monitor.paused ? ' -> monitor stop' : ''}`);
+    sidAudio.flush();
+    lastError = '';
+  } catch (error) {
+    fail(error);
   }
-  sidAudio.flush();
   render();
 });
 
@@ -329,6 +443,7 @@ runFrameButton.addEventListener('click', () => {
   }
 
   try {
+    machine.monitor.resume();
     const startFrame = machine.bus.io.vic.frameNumber;
     const executed = machine.runFrame();
     traceLines.push(
@@ -412,6 +527,75 @@ audioMuteButton.addEventListener('click', () => {
   render();
 });
 
+monitorAddBreakButton.addEventListener('click', () => monitorAction(() => {
+  const breakpoint = machine.monitor.addAddressBreakpoint(parseHexField(monitorBreakAddressInput, 'PC breakpoint'));
+  monitorRemoveIdInput.value = String(breakpoint.id);
+}));
+
+monitorAddWatchButton.addEventListener('click', () => monitorAction(() => {
+  const mode = monitorWatchModeSelect.value;
+  if (mode !== 'read' && mode !== 'write' && mode !== 'readwrite') {
+    throw new Error(`Unknown watchpoint mode: ${mode}.`);
+  }
+  const watchpoint = machine.monitor.addWatchpoint(parseHexField(monitorWatchAddressInput, 'watchpoint'), mode);
+  monitorRemoveIdInput.value = String(watchpoint.id);
+}));
+
+monitorAddRasterButton.addEventListener('click', () => monitorAction(() => {
+  const line = parseDecimalField(monitorRasterLineInput, 'raster line');
+  const cycleText = monitorRasterCycleInput.value.trim();
+  const cycle = cycleText === '' ? null : parseDecimalField(monitorRasterCycleInput, 'raster cycle');
+  const breakpoint = machine.monitor.addRasterBreakpoint(line, cycle);
+  monitorRemoveIdInput.value = String(breakpoint.id);
+}));
+
+monitorRemoveBreakButton.addEventListener('click', () => monitorAction(() => {
+  const id = parseDecimalField(monitorRemoveIdInput, 'breakpoint ID');
+  if (!machine.monitor.removeBreakpoint(id)) {
+    throw new Error(`No monitor breakpoint/watchpoint with ID ${id}.`);
+  }
+}));
+
+monitorClearBreaksButton.addEventListener('click', () => monitorAction(() => {
+  machine.monitor.clearBreakpoints();
+}));
+
+monitorContinueButton.addEventListener('click', () => {
+  if (!poweredOn) return;
+  setRunning(true);
+  updateControls();
+  render();
+});
+
+monitorApplyRegistersButton.addEventListener('click', () => monitorAction(() => {
+  requirePausedMonitorEdit();
+  machine.monitor.setCpuRegisters({
+    pc: parseHexField(monitorRegisterPcInput, 'PC'),
+    a: parseHexField(monitorRegisterAInput, 'A'),
+    x: parseHexField(monitorRegisterXInput, 'X'),
+    y: parseHexField(monitorRegisterYInput, 'Y'),
+    sp: parseHexField(monitorRegisterSpInput, 'SP'),
+    status: parseHexField(monitorRegisterPInput, 'P')
+  });
+}));
+
+monitorWriteMemoryButton.addEventListener('click', () => monitorAction(() => {
+  requirePausedMonitorEdit();
+  machine.monitor.writeMemory(
+    parseHexField(monitorWriteAddressInput, 'memory address'),
+    parseHexField(monitorWriteValueInput, 'memory value'),
+    'ram'
+  );
+}));
+
+monitorClearHistoryButton.addEventListener('click', () => monitorAction(() => {
+  machine.monitor.clearHistory();
+  traceLines.length = 0;
+}));
+
+monitorMemoryAddressInput.addEventListener('change', render);
+monitorMemoryViewSelect.addEventListener('change', render);
+
 vicCanvas.addEventListener('keydown', (event) => {
   if (!poweredOn || event.metaKey) {
     return;
@@ -466,6 +650,9 @@ function doStep(flush = true): void {
 }
 
 function setRunning(next: boolean): void {
+  if (next && poweredOn) {
+    machine.monitor.resume();
+  }
   running = poweredOn && next;
   runToggleButton.textContent = running ? 'Pause' : 'Run';
   lastAnimationTime = 0;
@@ -496,11 +683,15 @@ function animationTick(timestamp: number): void {
     let frames = 0;
     while (frameAccumulatorMs >= frameDurationMs && frames < 4) {
       machine.runFrame();
+      if (machine.monitor.paused) {
+        setRunning(false);
+        break;
+      }
       frameAccumulatorMs -= frameDurationMs;
       frames += 1;
     }
 
-    if (frames > 0) sidAudio.flush();
+    if (frames > 0 || machine.monitor.paused) sidAudio.flush();
 
     if (frames === 4 && frameAccumulatorMs > frameDurationMs * 4) {
       frameAccumulatorMs = frameDurationMs;
@@ -681,6 +872,208 @@ function fail(error: unknown): void {
   setRunning(false);
 }
 
+
+function monitorAction(action: () => void): void {
+  try {
+    action();
+    lastError = '';
+  } catch (error) {
+    lastError = errorMessage(error);
+  }
+  updateControls();
+  render();
+}
+
+function requirePausedMonitorEdit(): void {
+  if (!poweredOn) throw new Error('Power on the C64 before editing machine state.');
+  if (running) throw new Error('Pause execution before editing registers or memory.');
+}
+
+function renderMonitor(): void {
+  const monitor = machine.monitor;
+  const stop = monitor.stopReason;
+  monitorStatusElement.textContent = !poweredOn
+    ? 'Power off'
+    : running
+      ? 'Running'
+      : stop === null
+        ? 'Paused at instruction boundary'
+        : formatMonitorStop(stop);
+  monitorStatusElement.classList.toggle('ready', poweredOn && !running);
+
+  const breakpointLines = [
+    ...monitor.addressBreakpoints.map((breakpoint) =>
+      `#${breakpoint.id} PC     $${hex(breakpoint.address, 4)} ${breakpoint.enabled ? 'enabled' : 'disabled'}`),
+    ...monitor.watchpoints.map((watchpoint) => {
+      const range = watchpoint.startAddress === watchpoint.endAddress
+        ? `$${hex(watchpoint.startAddress, 4)}`
+        : `$${hex(watchpoint.startAddress, 4)}-$${hex(watchpoint.endAddress, 4)}`;
+      return `#${watchpoint.id} WATCH  ${range} ${watchpoint.mode} ${watchpoint.enabled ? 'enabled' : 'disabled'}`;
+    }),
+    ...monitor.rasterBreakpoints.map((breakpoint) =>
+      `#${breakpoint.id} RASTER ${breakpoint.rasterLine}:${breakpoint.rasterCycle ?? '*'} ${breakpoint.enabled ? 'enabled' : 'disabled'}`)
+  ].sort((left, right) => Number.parseInt(left.slice(1), 10) - Number.parseInt(right.slice(1), 10));
+  monitorBreakpointsElement.textContent = breakpointLines.length > 0
+    ? breakpointLines.join('\n')
+    : 'No breakpoints or watchpoints configured.';
+
+  if (!poweredOn) {
+    monitorMemoryElement.textContent = 'Power on to inspect memory.';
+    monitorHistoryElement.textContent = 'No execution history.';
+    monitorBusTraceElement.textContent = 'No bus trace.';
+    monitorInterruptsElement.textContent = 'No interrupt history.';
+    monitorHardwareElement.textContent = 'Power on to inspect hardware.';
+    monitorScreenElement.textContent = 'Power on to inspect screen memory.';
+    monitorTimelineContext.clearRect(0, 0, monitorTimelineCanvas.width, monitorTimelineCanvas.height);
+    return;
+  }
+
+  syncMonitorRegisterInputs();
+
+  const memoryAddress = tryParseHexField(monitorMemoryAddressInput) ?? machine.cpu.pc;
+  const view = monitorMemoryViewSelect.value === 'ram' ? 'ram' : 'mapped';
+  const memory = monitor.readMemory(memoryAddress, 128, view);
+  monitorMemoryElement.textContent = formatMemoryDump(memoryAddress, memory);
+
+  monitorHistoryElement.textContent = monitor.executionHistory.length === 0
+    ? 'No completed instruction boundaries recorded.'
+    : monitor.executionHistory.slice(-18).map((entry) =>
+        `$${hex(entry.pc, 4)} ${entry.instruction.padEnd(18, ' ')} A:${hex(entry.a, 2)} X:${hex(entry.x, 2)} Y:${hex(entry.y, 2)} ` +
+        `F${entry.frame} ${entry.rasterLine}:${entry.rasterCycle} M:${entry.masterCycle}`
+      ).join('\n');
+
+  monitorBusTraceElement.textContent = monitor.busTrace.length === 0
+    ? 'No CPU/VIC bus activity recorded.'
+    : monitor.busTrace.slice(-22).map((entry) =>
+        `${entry.source === 'cpu' ? 'CPU' : 'VIC'} ${entry.kind === 'read' ? 'R' : 'W'} $${hex(entry.address, 4)} ` +
+        `$${hex(entry.value, 2)}  F${entry.frame} ${entry.rasterLine}:${entry.rasterCycle} M:${entry.masterCycle}`
+      ).join('\n');
+
+  monitorInterruptsElement.textContent = monitor.interruptHistory.length === 0
+    ? 'No IRQ/NMI edges recorded.'
+    : monitor.interruptHistory.slice(-16).map((entry) =>
+        `${entry.kind} ${entry.asserted ? 'ASSERT' : 'CLEAR '} [${entry.sources.join('+') || '-'}] ` +
+        `PC:$${hex(entry.pc, 4)} F${entry.frame} ${entry.rasterLine}:${entry.rasterCycle} M:${entry.masterCycle}`
+      ).join('\n');
+
+  const hardware = monitor.hardwareSnapshot();
+  monitorHardwareElement.textContent = [
+    `CPU PC/A/X/Y  $${hex(hardware.cpu.pc, 4)} / $${hex(hardware.cpu.a, 2)} / $${hex(hardware.cpu.x, 2)} / $${hex(hardware.cpu.y, 2)}`,
+    `CPU SP/P      $${hex(hardware.cpu.sp, 2)} / $${hex(hardware.cpu.status, 2)}`,
+    `MASTER/STALL  ${hardware.masterCycle} / ${hardware.cpuStallCycles}`,
+    '',
+    `VIC F/L/C     ${hardware.vic.frame} / ${hardware.vic.rasterLine} / ${hardware.vic.rasterCycle}`,
+    `VIC IRQ/BA/AEC ${bit(hardware.vic.irqAsserted)} / ${bit(hardware.vic.baHigh)} / ${bit(hardware.vic.aecHigh)}`,
+    `VIC SCREEN    $${hex(hardware.vic.screenAddress, 4)}`,
+    `VIC CHAR/BMP  $${hex(hardware.vic.characterAddress, 4)} / $${hex(hardware.vic.bitmapAddress, 4)}`,
+    '',
+    `CIA1 TA/TB    $${hex(hardware.cia1.timerA, 4)} / $${hex(hardware.cia1.timerB, 4)}`,
+    `CIA1 ICR/MASK $${hex(hardware.cia1.interruptFlags, 2)} / $${hex(hardware.cia1.interruptMask, 2)}`,
+    `CIA2 TA/TB    $${hex(hardware.cia2.timerA, 4)} / $${hex(hardware.cia2.timerB, 4)}`,
+    `CIA2 ICR/MASK $${hex(hardware.cia2.interruptFlags, 2)} / $${hex(hardware.cia2.interruptMask, 2)}`,
+    '',
+    `SID MODEL     ${hardware.sid.model}`,
+    `SID FC        ${Math.round(hardware.sid.filterCutoffHz)} Hz`,
+    `SID ENV       ${hardware.sid.envelopeLevels.map((value) => hex(value, 2)).join(' / ')}`,
+    `PORT DDR/LAT  $${hex(hardware.processorPort.ddr, 2)} / $${hex(hardware.processorPort.latch, 2)}`
+  ].join('\n');
+
+  const screen = monitor.screenMemorySnapshot();
+  monitorScreenElement.textContent = [
+    `Screen RAM $${hex(screen.address, 4)}  Color RAM $D800`,
+    ...Array.from({ length: 10 }, (_, row) => {
+      const start = row * 40;
+      const chars = Array.from(screen.characters.slice(start, start + 40))
+        .map((value) => hex(value, 2)).join(' ');
+      return `${String(row).padStart(2, '0')}: ${chars}`;
+    }),
+    '… first 10 of 25 rows shown'
+  ].join('\n');
+
+  renderMonitorTimeline();
+}
+
+function syncMonitorRegisterInputs(): void {
+  const cpu = machine.cpu;
+  syncInputUnlessFocused(monitorRegisterPcInput, hex(cpu.pc, 4));
+  syncInputUnlessFocused(monitorRegisterAInput, hex(cpu.a, 2));
+  syncInputUnlessFocused(monitorRegisterXInput, hex(cpu.x, 2));
+  syncInputUnlessFocused(monitorRegisterYInput, hex(cpu.y, 2));
+  syncInputUnlessFocused(monitorRegisterSpInput, hex(cpu.sp, 2));
+  syncInputUnlessFocused(monitorRegisterPInput, hex(cpu.status, 2));
+}
+
+function syncInputUnlessFocused(input: HTMLInputElement, value: string): void {
+  if (document.activeElement !== input) input.value = value;
+}
+
+function renderMonitorTimeline(): void {
+  const context = monitorTimelineContext;
+  const width = monitorTimelineCanvas.width;
+  const height = monitorTimelineCanvas.height;
+  const vic = machine.bus.io.vic;
+  context.clearRect(0, 0, width, height);
+  context.fillStyle = '#111118';
+  context.fillRect(0, 0, width, height);
+  context.strokeStyle = '#3c3c50';
+  context.strokeRect(0.5, 0.5, width - 1, height - 1);
+
+  const trace = machine.monitor.busTrace.slice(-300);
+  for (const entry of trace) {
+    const x = ((entry.rasterCycle - 1) / Math.max(1, vic.timing.cyclesPerLine - 1)) * (width - 1);
+    const y = (entry.rasterLine / Math.max(1, vic.timing.linesPerFrame - 1)) * (height - 1);
+    context.fillStyle = entry.source === 'cpu' ? '#9ecbff' : '#f4bf75';
+    context.fillRect(Math.round(x), Math.round(y), 2, 2);
+  }
+
+  const currentX = ((vic.rasterCycle - 1) / Math.max(1, vic.timing.cyclesPerLine - 1)) * (width - 1);
+  const currentY = (vic.rasterLine / Math.max(1, vic.timing.linesPerFrame - 1)) * (height - 1);
+  context.strokeStyle = '#d4d4e3';
+  context.beginPath();
+  context.moveTo(currentX - 4, currentY);
+  context.lineTo(currentX + 4, currentY);
+  context.moveTo(currentX, currentY - 4);
+  context.lineTo(currentX, currentY + 4);
+  context.stroke();
+}
+
+function formatMonitorStop(stop: MonitorStopReason): string {
+  switch (stop.type) {
+    case 'manual': return stop.message;
+    case 'address': return `Stopped: PC $${hex(stop.address, 4)} (#${stop.breakpointId})`;
+    case 'watchpoint': return `Stopped: ${stop.access.kind} $${hex(stop.access.address, 4)} (#${stop.watchpointId})`;
+    case 'raster': return `Stopped: raster ${stop.rasterLine}:${stop.rasterCycle} (#${stop.breakpointId})`;
+  }
+}
+
+function formatMemoryDump(address: number, bytes: Uint8Array): string {
+  const lines: string[] = [];
+  for (let offset = 0; offset < bytes.length; offset += 16) {
+    const row = bytes.slice(offset, offset + 16);
+    lines.push(`$${hex((address + offset) & 0xffff, 4)}  ${Array.from(row).map((value) => hex(value, 2)).join(' ')}`);
+  }
+  return lines.join('\n');
+}
+
+function parseHexField(input: HTMLInputElement, label: string): number {
+  const value = tryParseHexField(input);
+  if (value === null) throw new Error(`${label} must be a hexadecimal value.`);
+  return value;
+}
+
+function tryParseHexField(input: HTMLInputElement): number | null {
+  const normalized = input.value.trim().replace(/^\$/, '').replace(/^0x/i, '');
+  if (!/^[0-9a-f]+$/i.test(normalized)) return null;
+  const value = Number.parseInt(normalized, 16);
+  return Number.isFinite(value) ? value : null;
+}
+
+function parseDecimalField(input: HTMLInputElement, label: string): number {
+  const normalized = input.value.trim();
+  if (!/^\d+$/.test(normalized)) throw new Error(`${label} must be a decimal integer.`);
+  return Number.parseInt(normalized, 10);
+}
+
 function render(): void {
   const cpu = machine.cpu;
   const config = machine.bus.configuration;
@@ -787,6 +1180,7 @@ function render(): void {
   audioStatusElement.title = audioError;
   audioStatusElement.classList.toggle('ready', sidAudio.active && sidAudio.state === 'running' && !sidAudio.isMuted);
 
+  renderMonitor();
   renderVicCanvas();
 }
 
@@ -818,6 +1212,10 @@ function updateControls(): void {
   runPrgButton.disabled = !poweredOn || selectedPrg === null;
   loadD64PrgButton.disabled = !poweredOn || mountedD64 === null || selectedD64Prg === null;
   runD64PrgButton.disabled = !poweredOn || mountedD64 === null || selectedD64Prg === null;
+  monitorApplyRegistersButton.disabled = !poweredOn || running;
+  monitorWriteMemoryButton.disabled = !poweredOn || running;
+  monitorContinueButton.disabled = !poweredOn || running;
+  monitorClearHistoryButton.disabled = !poweredOn;
   runToggleButton.textContent = running ? 'Pause' : 'Run';
 }
 

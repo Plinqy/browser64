@@ -6,6 +6,18 @@ import { Datasette } from '../tape/Datasette';
 import { PAL_6569_TIMING, type VicTimingProfile } from '../vic/VicTiming';
 import type { Bus } from './Bus';
 
+export type C64BusAccessKind = 'read' | 'write';
+export type C64BusAccessSource = 'cpu' | 'vic';
+
+export interface C64BusAccess {
+  source: C64BusAccessSource;
+  kind: C64BusAccessKind;
+  address: number;
+  value: number;
+}
+
+export type C64BusAccessObserver = (access: C64BusAccess) => void;
+
 export interface C64MemoryConfiguration {
   port: number;
   loram: boolean;
@@ -39,6 +51,7 @@ export class C64Bus implements Bus {
   private dataDirection = 0x2f;
   private dataLatch = 0x37;
   private dataBusLatch = 0xff;
+  private accessObserver: C64BusAccessObserver | null = null;
 
   // Deterministic external pin levels. Bits 0-2 are high when configured as
   // inputs, matching stock pulled-up banking lines. Bit 4 is the inactive
@@ -60,8 +73,10 @@ export class C64Bus implements Bus {
   }
 
   read(address: number): number {
-    const value = this.readMapped(address, false) & 0xff;
+    const normalizedAddress = address & 0xffff;
+    const value = this.readMapped(normalizedAddress, false) & 0xff;
     this.dataBusLatch = value;
+    this.accessObserver?.({ source: 'cpu', kind: 'read', address: normalizedAddress, value });
     return value;
   }
 
@@ -73,6 +88,7 @@ export class C64Bus implements Bus {
     const normalizedAddress = address & 0xffff;
     const byte = value & 0xff;
     this.dataBusLatch = byte;
+    this.accessObserver?.({ source: 'cpu', kind: 'write', address: normalizedAddress, value: byte });
 
     if (normalizedAddress === 0x0000) {
       this.dataDirection = byte;
@@ -126,11 +142,22 @@ export class C64Bus implements Bus {
     }
 
     this.dataBusLatch = value & 0xff;
+    const tracedAddress = configuration.cartridgeMode === 'ultimax' && vicAddress >= 0x3000
+      ? 0xf000 | (vicAddress & 0x0fff)
+      : (this.vicBankBase | vicAddress) & 0xffff;
+    this.accessObserver?.({ source: 'vic', kind: 'read', address: tracedAddress, value: this.dataBusLatch });
     return this.dataBusLatch;
   }
 
   readVicColor(index: number): number {
-    return this.io.colorRam.memory[index & 0x03ff]! & 0x0f;
+    const normalizedIndex = index & 0x03ff;
+    const value = this.io.colorRam.memory[normalizedIndex]! & 0x0f;
+    this.accessObserver?.({ source: 'vic', kind: 'read', address: 0xd800 | normalizedIndex, value });
+    return value;
+  }
+
+  setAccessObserver(observer: C64BusAccessObserver | null): void {
+    this.accessObserver = observer;
   }
 
   attachCartridge(cartridge: CartridgeDevice): void {

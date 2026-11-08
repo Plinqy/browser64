@@ -6,6 +6,7 @@ import type { D64Image } from '../disk/D64Image';
 import type { IecEndpoint } from '../iec/IecBus';
 import { Disassembler } from '../debugger/Disassembler';
 import { TraceFormatter } from '../debugger/TraceFormatter';
+import { C64Monitor } from '../debugger/Monitor';
 import type { JoystickControl, JoystickPort } from '../io/C64Io';
 import { C64Bus } from '../memory/C64Bus';
 import { parsePrg, type PrgLoadResult } from '../program/Prg';
@@ -36,6 +37,7 @@ export class C64Machine {
   public readonly cpu: Cpu6510;
   public readonly disassembler: Disassembler;
   public readonly trace: TraceFormatter;
+  public readonly monitor: C64Monitor;
   public readonly drive1541: C1541Drive;
 
   private cia2IrqWasAsserted = false;
@@ -52,6 +54,11 @@ export class C64Machine {
     this.c64ResetEndpoint = this.bus.io.iecBus.createEndpoint('c64-reset');
     this.disassembler = new Disassembler(this.bus);
     this.trace = new TraceFormatter(this.cpu);
+    this.monitor = new C64Monitor(this.cpu, this.bus, {
+      masterCycles: () => this.masterCycleCounter,
+      cpuStallCycles: () => this.cpuStallCounter
+    });
+    this.bus.setAccessObserver((access) => this.monitor.observeBusAccess(access));
   }
 
   loadRom(kind: C64RomKind, bytes: ArrayLike<number>): void {
@@ -112,21 +119,26 @@ export class C64Machine {
    * not yet emulated, so RAM is cleared instead of pretending to be authentic.
    */
   powerOn(): number {
-    this.bus.clearRam();
-    this.bus.resetProcessorPort();
-    this.bus.resetIo();
-    this.bus.io.colorRam.clear();
-    this.cia2IrqWasAsserted = false;
-    this.restorePressed = false;
-    this.masterCycleCounter = 0;
-    this.cpuStallCounter = 0;
-    this.driveClockAccumulator = 0;
-    this.c64ResetEndpoint.setPulledLow('reset', true);
-    this.drive1541.powerOn();
-    const cycles = this.cpu.reset();
-    this.advanceResetCycles(cycles);
-    this.c64ResetEndpoint.release('reset');
-    return cycles;
+    this.monitor.beginMachineReset();
+    try {
+      this.bus.clearRam();
+      this.bus.resetProcessorPort();
+      this.bus.resetIo();
+      this.bus.io.colorRam.clear();
+      this.cia2IrqWasAsserted = false;
+      this.restorePressed = false;
+      this.masterCycleCounter = 0;
+      this.cpuStallCounter = 0;
+      this.driveClockAccumulator = 0;
+      this.c64ResetEndpoint.setPulledLow('reset', true);
+      this.drive1541.powerOn();
+      const cycles = this.cpu.reset();
+      this.advanceResetCycles(cycles);
+      this.c64ResetEndpoint.release('reset');
+      return cycles;
+    } finally {
+      this.monitor.endMachineReset();
+    }
   }
 
   /**
@@ -134,19 +146,24 @@ export class C64Machine {
    * port and resettable I/O chips.
    */
   reset(): number {
-    this.bus.resetProcessorPort();
-    this.bus.resetIo();
-    this.cia2IrqWasAsserted = false;
-    this.restorePressed = false;
-    this.masterCycleCounter = 0;
-    this.cpuStallCounter = 0;
-    this.driveClockAccumulator = 0;
-    this.c64ResetEndpoint.setPulledLow('reset', true);
-    this.drive1541.reset();
-    const cycles = this.cpu.reset();
-    this.advanceResetCycles(cycles);
-    this.c64ResetEndpoint.release('reset');
-    return cycles;
+    this.monitor.beginMachineReset();
+    try {
+      this.bus.resetProcessorPort();
+      this.bus.resetIo();
+      this.cia2IrqWasAsserted = false;
+      this.restorePressed = false;
+      this.masterCycleCounter = 0;
+      this.cpuStallCounter = 0;
+      this.driveClockAccumulator = 0;
+      this.c64ResetEndpoint.setPulledLow('reset', true);
+      this.drive1541.reset();
+      const cycles = this.cpu.reset();
+      this.advanceResetCycles(cycles);
+      this.c64ResetEndpoint.release('reset');
+      return cycles;
+    } finally {
+      this.monitor.endMachineReset();
+    }
   }
 
   /**
@@ -156,6 +173,9 @@ export class C64Machine {
    * stalls. With BA/AEC high it is identical to the instruction's CPU cycles.
    */
   step(): number {
+    if (!this.cpu.instructionInProgress) {
+      this.monitor.recordInstructionBoundary();
+    }
     const startingMasterCycle = this.masterCycleCounter;
     let completed = false;
 
@@ -184,6 +204,7 @@ export class C64Machine {
     this.bus.tickDatasette(1);
     this.advance1541Clock();
     this.masterCycleCounter += 1;
+    this.monitor.observeRasterPosition();
     this.syncInterruptLines();
 
     return {
@@ -197,11 +218,14 @@ export class C64Machine {
   run(maxInstructions: number, shouldStop?: (machine: C64Machine) => boolean): number {
     let executed = 0;
     while (executed < maxInstructions) {
-      if (shouldStop?.(this)) {
+      if (this.monitor.shouldPauseBeforeInstruction() || shouldStop?.(this)) {
         break;
       }
       this.step();
       executed += 1;
+      if (this.monitor.paused) {
+        break;
+      }
     }
     return executed;
   }
@@ -219,6 +243,7 @@ export class C64Machine {
   setRestorePressed(pressed: boolean): void {
     if (pressed && !this.restorePressed) {
       this.cpu.pulseNmi();
+      this.monitor.observeNmi('RESTORE');
     }
     this.restorePressed = pressed;
   }
@@ -296,13 +321,18 @@ export class C64Machine {
   }
 
   private syncInterruptLines(): void {
-    const maskableIrq = this.bus.io.cia1.irqAsserted || this.bus.io.vic.irqAsserted;
+    const cia1Irq = this.bus.io.cia1.irqAsserted;
+    const vicIrq = this.bus.io.vic.irqAsserted;
+    const maskableIrq = cia1Irq || vicIrq;
     const cia2Irq = this.bus.io.cia2.irqAsserted;
+    const irqSources = [cia1Irq ? 'CIA1' : '', vicIrq ? 'VIC-II' : ''].filter((source) => source !== '');
 
+    this.monitor.observeIrq(maskableIrq, irqSources);
     this.cpu.setIrqLine(maskableIrq);
 
     if (cia2Irq && !this.cia2IrqWasAsserted) {
       this.cpu.pulseNmi();
+      this.monitor.observeNmi('CIA2');
     }
 
     this.cia2IrqWasAsserted = cia2Irq;

@@ -11,7 +11,7 @@ export { Cia6526, CiaInterrupt } from './cia/Cia6526';
 export { KeyboardMatrix } from './cia/KeyboardMatrix';
 export type { Bus } from './memory/Bus';
 export { C64Bus } from './memory/C64Bus';
-export type { C64MemoryConfiguration } from './memory/C64Bus';
+export type { C64BusAccess, C64BusAccessKind, C64BusAccessObserver, C64BusAccessSource, C64MemoryConfiguration } from './memory/C64Bus';
 export { RamBus } from './memory/RamBus';
 export type { MemoryMappedDevice } from './io/Device';
 export { C64Io } from './io/C64Io';
@@ -33,6 +33,22 @@ export { C64Machine } from './machine/C64Machine';
 export type { C64SystemCycleResult } from './machine/C64Machine';
 export { Disassembler } from './debugger/Disassembler';
 export { TraceFormatter, formatFlags } from './debugger/TraceFormatter';
+export { C64Monitor } from './debugger/Monitor';
+export type {
+  AddressBreakpoint,
+  MemoryView,
+  MonitorBusTraceEntry,
+  MonitorCiaSnapshot,
+  MonitorExecutionEntry,
+  MonitorHardwareSnapshot,
+  MonitorInterruptEntry,
+  MonitorStopReason,
+  MonitorVicSnapshot,
+  RasterBreakpoint,
+  ScreenMemorySnapshot,
+  Watchpoint,
+  WatchpointMode
+} from './debugger/Monitor';
 export {
   VicII,
   VicGraphicsMode,

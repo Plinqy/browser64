@@ -2,7 +2,7 @@
 
 A from-scratch Commodore 64 emulator written in TypeScript for the browser.
 
-Version **0.10.0** adds usable D64 disk-image browsing/extraction and the physical serial IEC bus foundation needed for later true 1541 emulation, while retaining the v0.9 CPU/VIC/SID compatibility work.
+Version **0.13.0** adds an integrated machine monitor with breakpoints, watchpoints, raster stops, editable state, bounded execution/bus/interrupt histories, and VIC/CIA/SID inspection. It builds on the true 1541, cartridge/expansion-port, and TAP/Datasette support added in the preceding milestones.
 
 ## Current Capabilities
 
@@ -99,6 +99,37 @@ Version **0.10.0** adds usable D64 disk-image browsing/extraction and the physic
 - real CIA2 PA6/PA7 CLOCK/DATA input feedback
 - explicit separation between host-assisted D64 access and future true-drive IEC traffic
 
+### Commodore 1541 True Drive
+
+- independent 1 MHz NMOS 6502 drive computer
+- 2 KiB drive RAM and two MOS 6522 VIA devices
+- user-supplied 16 KiB 1541 DOS ROM
+- shared open-collector IEC ATN/CLOCK/DATA/RESET wiring
+- D64-to-GCR read-side disk mechanism with density zones and half-track stepping
+- firmware-driven serial traffic rather than KERNAL LOAD traps
+
+### Cartridges, Expansion Port, and Datasette
+
+- expansion-port device abstraction with GAME/EXROM PLA participation
+- raw 8 KiB, 16 KiB, and Ultimax cartridge images
+- VICE CRT parsing for generic hardware type 0
+- ROML/ROMH mapping, RAM-under-ROM writes, Ultimax open regions, and VIC ROMH visibility
+- IO1/IO2 routing foundation for future banked/freezer hardware
+- Commodore 1530/C2N MOTOR/SENSE/WRITE wiring
+- TAP v0/v1 parsing and cycle-timed CIA1 FLAG playback
+- PAL/NTSC/old-NTSC/PAL-N source-clock conversion into the active machine clock
+
+### Machine Monitor
+
+- PC address breakpoints without patching guest memory
+- CPU read/write/read-write watchpoints
+- VIC raster line and exact line/cycle stops
+- side-effect-free mapped-memory inspection and physical-RAM inspection/editing
+- editable 6510 registers at instruction boundaries
+- bounded instruction, CPU/VIC bus, and IRQ/NMI histories
+- VIC/CIA/SID/processor-port hardware snapshots
+- screen-matrix/color-RAM inspection and raster/cycle bus-activity visualization
+
 ### Browser Runtime
 
 - continuous Run/Pause mode paced from the VIC timing profile
@@ -140,11 +171,7 @@ Version **0.10.0** adds usable D64 disk-image browsing/extraction and the physic
 - older 6567R56A NTSC profile and deeper per-revision VIC timing
 - full transistor/op-amp-level 6581 filter calibration and per-chip variation
 - exact SID POT RC conversion timing and analog noise/distortion floor
-- cycle-accurate 1541 CPU/VIA/GCR drive emulation
-- KERNAL LOAD over the physical IEC handshake / fast-loader compatibility
 - D64 write-back, SAVE, REL/SEQ host operations, and BAM mutation
-- T64/TAP loading and datasette
-- cartridges/GAME/EXROM
 - chip-specific modeling for unstable XAA/LXA/AHX/TAS/SHX/SHY opcodes
 - BRK/IRQ vector hijacking and the remaining interrupt race edge cases
 - reset-pin micro-sequencing
@@ -199,7 +226,7 @@ The Klaus Dormann functional test remains optional. If you possess the 64 KiB `6
 tests/assets/6502_functional_test.bin
 ```
 
-## v0.10 Architecture
+## v0.13 Architecture
 
 ```text
 Browser adapters
@@ -260,20 +287,21 @@ The host-only input adapter is separately documented in `src/input/README.md`.
 
 ## Roadmap
 
-### v0.10 — D64 and IEC foundation
+### v0.13 — Advanced debugger tooling
 
-- D64 parsing and directory/file access
-- explicit IEC serial-bus lines and device abstraction
-- high-level accelerated LOAD path kept separate from hardware emulation
-- groundwork for a later cycle-synchronized 1541 computer
+- address breakpoints and CPU watchpoints
+- raster line/cycle breakpoints
+- editable CPU/RAM state at safe instruction boundaries
+- bounded execution, bus, and interrupt histories
+- VIC/CIA/SID/processor-port and screen-memory inspection
+- browser raster/cycle trace visualization
 
 ### Later
 
-- deeper CPU/VIC half-cycle edge-case accuracy and VICE tests
-- full 1541 emulation
-- cartridges and tape
-- advanced debugger tooling
-- save states and compatibility/performance hardening
+- deeper CPU/VIC half-cycle edge-case accuracy and VICE compatibility tests
+- writable/flux-preserving drive media and fast-loader compatibility hardening
+- cartridge-specific bank switching/freezer hardware and TAP v2/recording
+- save states, profiling, and compatibility/performance hardening
 
 ## Design Rules
 

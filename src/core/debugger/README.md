@@ -1,65 +1,92 @@
-# Debugger and Disassembly
+# Debugger and Machine Monitor
 
 ## Overview
 
-This directory provides developer tooling around the emulator core without changing emulated state. Version 0.1 includes an instruction disassembler and a compact trace-line formatter.
+`src/core/debugger` provides side-effect-free inspection and execution control for the emulator core. Version 0.13 expands the existing disassembler/trace helpers into a machine monitor with address breakpoints, CPU read/write watchpoints, raster line/cycle stops, editable CPU/RAM state, bounded execution and bus histories, IRQ/NMI history, hardware snapshots, and screen-memory inspection.
 
 Files:
 
-- `Disassembler.ts` — decodes official opcode metadata and formats operands.
-- `TraceFormatter.ts` — combines disassembly with CPU registers, flags, and cycle count.
+- `Disassembler.ts` — decodes the CPU opcode table without touching device side effects.
+- `TraceFormatter.ts` — formats the current instruction and CPU state for compact traces.
+- `Monitor.ts` — owns debugger configuration, stop reasons, bounded histories, state editing, and hardware snapshots.
 
 ## Architecture
 
-Debugger code observes the CPU and bus but is not part of instruction execution:
+The monitor observes the machine rather than modifying guest code:
 
 ```text
-             +-------------+
-             |   Cpu6510   |
-             +------+------+ 
-                    |
-                  Bus
-                    ^
-                    | peek only
-             +------+------+
-             |  Debugger   |
-             +-------------+
+                   +----------------+
+                   |   C64Machine   |
+                   | instruction /  |
+                   | raster timing  |
+                   +---+--------+---+
+                       |        |
+             boundaries|        |raster / IRQ / NMI
+                       v        v
+                  +----------------+
+                  |   C64Monitor   |
+                  +---+--------+---+
+                      ^        ^
+             bus trace|        |peek / physical RAM
+                      |        |
+                 +----+--------+----+
+                 |      C64Bus      |
+                 +------------------+
 ```
 
-The key rule is that disassembly uses `Bus.peek()`, not `Bus.read()`. This distinction has no visible effect with `RamBus`, but it becomes essential when reading C64 registers can clear flags, acknowledge interrupts, or return transient bus values.
+`C64Bus` exposes a single optional access observer. Normal CPU and VIC traffic is reported to the monitor after the bus value is known. Debugger reads themselves use `peek()` or direct physical-RAM inspection, so opening the monitor cannot acknowledge interrupts, clear collision latches, alter the shared data-bus latch, or otherwise change emulated hardware state.
 
-## Implementation Discussion
+## Execution Stops
 
-### Disassembler
+### Address breakpoints
 
-The disassembler consumes the same opcode metadata table used by the CPU decoder. This prevents a second, independently maintained opcode-length table from drifting out of sync.
+Address breakpoints are checked before an instruction begins. Continuing from a stopped PC ignores that same breakpoint exactly once so the machine can make forward progress without removing it.
 
-Relative branches are rendered as their resolved destination address rather than raw signed offsets. Unknown/undocumented opcodes are displayed as `.byte $xx`, allowing memory dumps to remain navigable before illegal-opcode execution is implemented.
+### Watchpoints
 
-### Trace format
+Watchpoints can cover one address or a contiguous range and can match reads, writes, or both. Only CPU traffic triggers watchpoints; VIC traffic is still captured in the bus trace but cannot unexpectedly halt the CPU because the video chip fetched screen or character data from the watched range.
 
-A trace captures the instruction *about to execute* and the CPU state at that boundary. This convention makes traces straightforward to compare against reference emulator logs:
+The access that hits a watchpoint is recorded at its exact master/raster cycle. The machine then completes the current 6510 instruction and pauses at a safe instruction boundary. This avoids exposing a half-completed micro-operation to register or memory editing.
 
-```text
-0800  A2 00    LDX #$00           A:00 X:00 Y:00 SP:FD P:..-..I.. CYC:7
-```
+### Raster breakpoints
 
-The browser demo keeps a small rolling trace, while tests can instantiate `TraceFormatter` directly.
+Raster stops can target a whole line or an exact line/cycle. The hit is latched at the requested VIC-II position and, like a watchpoint, execution pauses after the current CPU instruction completes. Line-only stops are edge-latched so they fire once on entry rather than once per cycle for the entire line.
 
-### Future monitor
+## Inspection and Editing
 
-The planned machine monitor will build on these primitives with:
+The monitor exposes:
 
-- breakpoints by address and condition
-- watchpoints for reads/writes
-- memory dump/edit
-- register edit
-- assembly input
-- symbolic labels
-- raster/cycle breakpoints
-- VIC-II state inspection
-- CIA timers and interrupt sources
-- SID register display
-- execution history
+- CPU registers and total CPU cycles
+- mapped-memory dumps through `peek()`
+- physical RAM dumps/writes beneath ROM or I/O
+- CPU register editing at instruction boundaries
+- VIC frame/raster state, BA/AEC, bad-line state, graphics mode, memory bases, and colors
+- CIA timer, latch, interrupt, control, port, and DDR state
+- SID model/filter/envelope snapshot
+- 6510 processor-port DDR/latch/pin state
+- the active 1000-byte screen matrix plus color RAM
 
-Breakpoints should be implemented by the machine runner, not by modifying guest memory with trap opcodes. That keeps debugging observational and avoids changing timing or behavior.
+Edits are intentionally rejected while a CPU instruction is in progress. The browser UI also requires the machine to be paused before applying register or RAM changes.
+
+## Histories and Tracing
+
+Histories are bounded so leaving the browser running does not grow debugger memory indefinitely. The default limits are 256 instruction-boundary entries, 512 CPU/VIC bus accesses, and 128 interrupt edges.
+
+Execution history stores the disassembled instruction plus CPU/master/raster position. Bus history records source (`CPU` or `VIC`), read/write direction, address, value, and timing position. IRQ history records assertion and clearing edges with the active CIA1/VIC-II sources; NMI history records RESTORE and CIA2 edges.
+
+Power-on/reset clears runtime histories and a latched stop while preserving configured breakpoints/watchpoints, matching normal monitor expectations during iterative debugging.
+
+## Browser Monitor
+
+The development console exposes the monitor directly:
+
+- add/remove PC breakpoints, watchpoints, and raster stops
+- Continue from a stop
+- inspect/edit CPU registers
+- inspect mapped memory or physical RAM and write RAM bytes
+- view execution, bus, and interrupt histories
+- inspect VIC/CIA/SID/processor-port state
+- inspect screen matrix bytes
+- view a raster/cycle activity plot of recent CPU and VIC bus accesses
+
+The browser layer only renders and edits through the core monitor API; breakpoint semantics remain testable without DOM or browser APIs.
