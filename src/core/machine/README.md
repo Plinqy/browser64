@@ -2,7 +2,7 @@
 
 ## Overview
 
-`C64Machine` is the composition root for a stock Commodore 64 and is constructed with an immutable PAL/NTSC timing profile. It owns the CPU, bus, VIC-II, SID, both CIA chips, debugger interfaces, interrupt wiring, the master system clock, and the machine-level operations a host needs for ROM startup, joystick state, RESTORE, and PRG loading.
+`C64Machine` is the composition root for a stock Commodore 64 and is constructed with an immutable PAL/NTSC timing profile. It owns the CPU, bus, VIC-II, SID, both CIA chips, debugger interfaces, interrupt wiring, the master system clock, and the machine-level operations a host needs for ROM startup, joystick state, RESTORE, and PRG loading. The underlying `C64Bus` also owns the shared serial IEC bus used by CIA2 and future peripherals.
 
 The browser is responsible for wall-clock pacing and host-event translation; the machine remains deterministic.
 
@@ -27,8 +27,8 @@ The browser is responsible for wall-clock pacing and host-event translation; the
              +--------- C64Bus ------+
                          |
                     SID / CIA1 / CIA2
-                         |
-              keyboard / joysticks
+                         |       |
+              keyboard / joysticks   IEC bus
 ```
 
 CIA1 and VIC-II share the 6510 IRQ line. CIA2 assertion is edge-converted to NMI. RESTORE supplies an independent NMI edge. VIC memory remains independent of CPU memory banking.
@@ -61,6 +61,10 @@ CIA2's interrupt output and RESTORE are separate sources on the NMI path. CIA2 i
 ### Joysticks
 
 `setJoystickControl()` delegates named directions/fire to `C64Io`, which converts them to active-low CIA1 port pins. The host does not write CIA registers directly.
+
+### D64 and IEC boundary
+
+D64 parsing is not a machine timing operation. The browser/core storage layer can extract a PRG from a mounted image and then invoke the same `loadPrg()` path described below. The physical `IecBus` is separate and stays connected to CIA2 regardless of whether a D64 image is mounted. A later 1541 emulator can therefore attach to IEC without replacing or depending on host-assisted disk browsing.
 
 ### PRG loading
 

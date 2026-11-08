@@ -45,3 +45,7 @@ When a PRG loads at `$0801`, the machine helper sets `TXTTAB` (`$2B/$2C`) to `$0
 ### Physical RAM
 
 PRG bytes are written to physical RAM. This is intentional: a load operation can place bytes underneath currently visible ROM, just as C64 RAM physically exists beneath banked ROM regions. CPU visibility after loading still obeys `$0001` banking.
+
+### D64 integration
+
+Version 0.10 does not add disk-format concerns to `parsePrg()`. `D64Image.readPrg()` extracts the exact PRG file bytes, including the two-byte load address, and the caller then uses the same parser/machine loading path described above. This keeps container semantics composable and avoids coupling PRG loading to a future 1541 implementation.

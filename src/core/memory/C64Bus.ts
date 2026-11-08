@@ -1,3 +1,4 @@
+import { IecBus } from '../iec/IecBus';
 import { C64Io } from '../io/C64Io';
 import { C64Roms } from '../rom/RomSet';
 import { PAL_6569_TIMING, type VicTimingProfile } from '../vic/VicTiming';
@@ -19,12 +20,13 @@ export interface C64MemoryConfiguration {
  *
  * The bus also exposes the VIC's independent 14-bit memory view. VIC accesses
  * bypass CPU ROM/I/O banking and apply CIA2 bank selection plus VIC-specific
- * character-ROM shadowing. v0.9 additionally tracks the last CPU data value so
- * genuinely undriven I/O and color-RAM upper bits have open-bus behavior.
+ * character-ROM shadowing. v0.10 also owns the shared serial IEC bus while
+ * retaining the v0.9 shared data latch for open-bus/color-RAM behavior.
  */
 export class C64Bus implements Bus {
   public readonly ram = new Uint8Array(0x10000);
   public readonly roms = new C64Roms();
+  public readonly iec = new IecBus();
   public readonly io: C64Io;
 
   private dataDirection = 0x2f;
@@ -40,7 +42,7 @@ export class C64Bus implements Bus {
     this.io = new C64Io({
       read: (address) => this.readVicMemory(address),
       readColor: (index) => this.readVicColor(index)
-    }, timing, () => this.dataBusLatch);
+    }, timing, () => this.dataBusLatch, this.iec);
   }
 
   read(address: number): number {

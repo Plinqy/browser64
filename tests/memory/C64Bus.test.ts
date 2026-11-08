@@ -230,3 +230,22 @@ describe('C64Bus CPU data-bus/open-bus behavior', () => {
     expect(bus.peek(0xde00)).toBe(0x5a);
   });
 });
+
+describe('C64Bus serial IEC integration', () => {
+  it('routes CPU-visible CIA2 writes and external bus levels through the shared IEC bus', () => {
+    const bus = new C64Bus();
+    const drive = bus.iec.createEndpoint('drive8');
+
+    bus.write(0xdd02, 0x38); // PA3-PA5 outputs; PA6/PA7 inputs.
+    bus.write(0xdd00, 0x10); // C64 pulls CLOCK low.
+
+    expect(bus.iec.atnHigh).toBe(true);
+    expect(bus.iec.clockHigh).toBe(false);
+    expect(bus.iec.dataHigh).toBe(true);
+    expect(bus.read(0xdd00) & 0xc0).toBe(0x80);
+
+    drive.setPulledLow('data', true);
+    expect(bus.iec.dataHigh).toBe(false);
+    expect(bus.read(0xdd00) & 0xc0).toBe(0x00);
+  });
+});

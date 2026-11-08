@@ -9,6 +9,7 @@ export enum CiaInterrupt {
 }
 
 type PortInputProvider = () => number;
+type PortOutputChangeHandler = () => void;
 
 const REGISTER_MASK = 0x0f;
 const INTERRUPT_MASK = 0x1f;
@@ -63,6 +64,7 @@ export class Cia6526 implements MemoryMappedDevice {
 
   private portAInput: PortInputProvider = () => 0xff;
   private portBInput: PortInputProvider = () => 0xff;
+  private portAOutputChange: PortOutputChangeHandler = () => {};
 
   constructor() {
     this.reset();
@@ -172,6 +174,10 @@ export class Cia6526 implements MemoryMappedDevice {
       default:
         throw new Error(`Unexpected CIA register: ${register}`);
     }
+
+    if (register === 0x00 || register === 0x02) {
+      this.portAOutputChange();
+    }
   }
 
   reset(): void {
@@ -211,6 +217,7 @@ export class Cia6526 implements MemoryMappedDevice {
     this.cntHigh = false;
     this.spHigh = true;
     this.flagHigh = true;
+    this.portAOutputChange();
   }
 
   /** Advance one or more PHI2 cycles. */
@@ -314,6 +321,11 @@ export class Cia6526 implements MemoryMappedDevice {
 
   setPortBInputProvider(provider: PortInputProvider): void {
     this.portBInput = provider;
+  }
+
+  setPortAOutputChangeHandler(handler: PortOutputChangeHandler): void {
+    this.portAOutputChange = handler;
+    handler();
   }
 
   get irqAsserted(): boolean {

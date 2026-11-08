@@ -4,7 +4,7 @@
 
 `src/core/cia` contains the browser-independent MOS 6526 Complex Interface Adapter implementation and the physical C64 keyboard switch matrix. A stock C64 contains two 6526s: CIA1 at `$DC00-$DC0F` and CIA2 at `$DD00-$DD0F`, with their 16-register files mirrored throughout `$DC00-$DCFF` and `$DD00-$DDFF` respectively.
 
-Version 0.3 replaces the v0.2 CIA register-file placeholders with functional devices. The implementation covers the software-visible behavior required for C64 startup and input work: parallel ports and DDRs, both 16-bit timers, interrupt data/mask handling, TOD/alarm behavior, FLAG input, CNT timer modes, serial input shifting, CIA1 keyboard matrix wiring, and CIA2 VIC-bank output.
+Version 0.3 replaces the v0.2 CIA register-file placeholders with functional devices. The implementation covers the software-visible behavior required for C64 startup and input work: parallel ports and DDRs, both 16-bit timers, interrupt data/mask handling, TOD/alarm behavior, FLAG input, CNT timer modes, serial input shifting, CIA1 keyboard matrix wiring, and CIA2 VIC-bank output. Version 0.10 adds a port-A output observer so motherboard wiring such as IEC reacts consistently whether PRA/DDRA are changed through the CPU-visible I/O router or directly by a debugger/test harness.
 
 ## Architecture
 
@@ -16,6 +16,7 @@ C64Machine
           +--> CIA1 (6526) <--> KeyboardMatrix / joystick pin state
           |
           +--> CIA2 (6526) ----> VIC bank select
+                              \--> IEC motherboard drivers
 
 CIA1 IRQ -----------------------> 6510 IRQ level
 CIA2 IRQ -- rising assertion ---> 6510 NMI edge
@@ -30,6 +31,8 @@ The keyboard model stores physical `(column,row)` switch closures. Host/browser 
 ### Parallel ports
 
 PRA/PRB output latches are combined with DDRA/DDRB and external input-provider callbacks. A DDR bit of `1` drives the corresponding output latch; a bit of `0` reads the external pin level. CIA1 providers model the active-low keyboard matrix and joystick pins. PB6/PB7 are overridden when Timer A/Timer B port output is enabled.
+
+`setPortAOutputChangeHandler()` observes the resolved PRA/DDRA output-latch state without embedding C64-specific wiring in the CIA. `C64Io` uses that hook for CIA2's inverted IEC ATN/CLOCK/DATA drivers. The callback fires after PRA/DDRA writes and reset, so direct CIA access and CPU-routed writes cannot diverge.
 
 ### Timers
 

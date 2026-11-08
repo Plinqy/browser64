@@ -1,4 +1,8 @@
 export { Cpu6510, CpuJammedError, UnstableOpcodeError, UnsupportedOpcodeError } from './cpu/Cpu6510';
+export { D64Image, decodePetscii, parseD64 } from './disk/D64Image';
+export type { D64DirectoryEntry, D64DiskHeader, D64FileType, D64Geometry } from './disk/D64Image';
+export { IecBus, IecEndpoint } from './iec/IecBus';
+export type { IecBusSnapshot, IecLine } from './iec/IecBus';
 export type { CpuClockResult, CpuCycleKind } from './cpu/Cpu6510';
 export { Flag } from './cpu/Flags';
 export { IMPLEMENTED_OPCODE_COUNT, OFFICIAL_OPCODE_COUNT, OPCODES, UNSTABLE_OPCODE_COUNT, getOpcodeInfo } from './cpu/opcodes';

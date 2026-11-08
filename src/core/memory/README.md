@@ -2,7 +2,7 @@
 
 ## Overview
 
-This directory contains the byte-addressable bus abstractions used by the CPU and the C64's machine-specific memory rules. `RamBus` is the flat 64 KiB CPU-test bus. `C64Bus` owns physical RAM, CPU ROM/I/O banking, the 6510 processor port, and the independent memory view used by the VIC-II.
+This directory contains the byte-addressable bus abstractions used by the CPU and the C64's machine-specific memory rules. `RamBus` is the flat 64 KiB CPU-test bus. `C64Bus` owns physical RAM, CPU ROM/I/O banking, the 6510 processor port, the independent memory view used by the VIC-II, and the shared IEC wire object consumed by C64 I/O and future peripherals.
 
 ## Architecture
 
@@ -39,3 +39,7 @@ Color RAM is separate from the VIC 14-bit byte bus. `readVicColor()` supplies it
 v0.9 tracks the last value driven on the shared 8-bit system data bus. CPU reads/writes update it, and VIC DRAM/character-ROM fetches update it as well. With no cartridge present, `$DE00-$DFFF` reads the current latch. Color RAM drives only D0-D3, so its read value combines the stored low nibble with the latch's high nibble. Debugger `peek()` calls do not themselves change the latch.
 
 This is a system-cycle open-bus model. Exact phi1/phi2 charge timing—especially which VIC fetch is electrically freshest during a same-cycle CPU open-bus read—remains a later half-cycle refinement. Cartridge GAME/EXROM PLA modes also remain future work.
+
+### IEC ownership
+
+`C64Bus.iec` owns the machine's `IecBus` instance. `C64Io` attaches the C64 endpoint to CIA2, while future peripherals can attach additional endpoints to the same physical-line model. Disk-image parsing remains independent from the bus; host-assisted D64 extraction never mutates IEC line state.

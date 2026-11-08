@@ -1,4 +1,5 @@
 import { Cia6526 } from '../cia/Cia6526';
+import { IecBus, type IecEndpoint } from '../iec/IecBus';
 import { KeyboardMatrix } from '../cia/KeyboardMatrix';
 import { Sid } from '../sid/Sid';
 import { VicII, type VicMemory } from '../vic/VicII';
@@ -21,9 +22,9 @@ const JOYSTICK_MASK: Readonly<Record<JoystickControl, number>> = Object.freeze({
 /**
  * Routes CPU accesses inside the C64's $D000-$DFFF I/O window.
  *
- * v0.9 keeps the timed VIC-II/CIAs/SID on a machine timing profile and lets
- * undriven expansion I/O plus the high nibble of color RAM observe the CPU
- * data-bus latch supplied by C64Bus.
+ * v0.10 keeps the timed VIC-II/CIAs/SID on a machine timing profile, wires
+ * CIA2 to the physical serial IEC bus, and lets undriven expansion I/O plus
+ * the high nibble of color RAM observe the CPU data-bus latch supplied by C64Bus.
  */
 export class C64Io implements MemoryMappedDevice {
   public readonly vic: VicII;
@@ -34,20 +35,25 @@ export class C64Io implements MemoryMappedDevice {
   public readonly keyboard = new KeyboardMatrix();
   public readonly io1: OpenBusDevice;
   public readonly io2: OpenBusDevice;
+  public readonly iecBus: IecBus;
 
+  private readonly c64IecEndpoint: IecEndpoint;
   private joystick1Pins = 0xff;
   private joystick2Pins = 0xff;
 
   constructor(
     vicMemory?: VicMemory,
     timing: VicTimingProfile = PAL_6569_TIMING,
-    openBusValue: () => number = () => 0xff
+    openBusValue: () => number = () => 0xff,
+    iecBus: IecBus = new IecBus()
   ) {
     this.vic = new VicII(vicMemory, timing);
     this.sid = new Sid('6581', timing.systemClockHz);
     this.colorRam = new ColorRam(openBusValue);
     this.io1 = new OpenBusDevice(openBusValue);
     this.io2 = new OpenBusDevice(openBusValue);
+    this.iecBus = iecBus;
+    this.c64IecEndpoint = iecBus.createEndpoint('c64');
 
     // CIA1 Port A normally drives keyboard columns and shares pins with
     // joystick 2. Port B normally reads rows and shares pins with joystick 1.
@@ -59,9 +65,17 @@ export class C64Io implements MemoryMappedDevice {
       () => this.keyboard.readRows(this.cia1.portAOutputLowMask) & this.joystick1Pins
     );
 
-    // CIA2's unmodeled IEC/user-port input lines are pulled high. This also
-    // gives PA0/PA1 their stock reset input state, selecting VIC bank 0.
-    this.cia2.setPortAInputProvider(() => 0xff);
+    this.cia2.setPortAOutputChangeHandler(() => this.syncCia2IecOutputs());
+
+    // CIA2 PA6/PA7 read the resolved IEC CLOCK/DATA levels. The remaining
+    // external input pins are pulled high, including PA0/PA1 at reset so VIC
+    // bank 0 remains the stock default.
+    this.cia2.setPortAInputProvider(() => {
+      let pins = 0xff;
+      if (!this.iecBus.clockHigh) pins &= ~0x40;
+      if (!this.iecBus.dataHigh) pins &= ~0x80;
+      return pins;
+    });
     this.cia2.setPortBInputProvider(() => 0xff);
   }
 
@@ -136,6 +150,16 @@ export class C64Io implements MemoryMappedDevice {
 
   get joystick2InputPins(): number {
     return this.joystick2Pins;
+  }
+
+  /** Apply CIA2 PA3-PA5 through the C64's inverting open-collector drivers. */
+  private syncCia2IecOutputs(): void {
+    const pra = this.cia2.portADataRegister;
+    const ddra = this.cia2.dataDirectionA;
+
+    this.c64IecEndpoint.setPulledLow('atn', (ddra & 0x08) !== 0 && (pra & 0x08) !== 0);
+    this.c64IecEndpoint.setPulledLow('clock', (ddra & 0x10) !== 0 && (pra & 0x10) !== 0);
+    this.c64IecEndpoint.setPulledLow('data', (ddra & 0x20) !== 0 && (pra & 0x20) !== 0);
   }
 
   private resolve(offset: number): { device: MemoryMappedDevice; deviceOffset: number } {

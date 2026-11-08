@@ -8,8 +8,11 @@ import {
   VIC_FRAMEBUFFER_HEIGHT,
   VIC_FRAMEBUFFER_WIDTH,
   VicGraphicsMode,
+  parseD64,
   parsePrg,
   type C64RomKind,
+  type D64DirectoryEntry,
+  type D64Image,
   type SidChipModel
 } from './core';
 import { SidAudio } from './audio/SidAudio';
@@ -28,6 +31,8 @@ let running = false;
 let lastError = '';
 let audioError = '';
 let selectedPrg: { name: string; bytes: Uint8Array } | null = null;
+let mountedD64: { name: string; image: D64Image; entries: readonly D64DirectoryEntry[] } | null = null;
+let selectedD64Prg: D64DirectoryEntry | null = null;
 let animationFrame: number | null = null;
 let lastAnimationTime = 0;
 let frameAccumulatorMs = 0;
@@ -37,7 +42,7 @@ app.innerHTML = `
     <header>
       <p class="eyebrow">FROM-SCRATCH C64 EMULATOR</p>
       <h1>Commodore 64 Development Console</h1>
-      <p>v0.9 — undocumented 6510 compatibility, interrupt timing, shared open-bus behavior, and PAL/NTSC profiles.</p>
+      <p>v0.10 — D64 directory/file support and a physical open-collector serial IEC bus foundation.</p>
     </header>
 
     <article class="panel rom-panel">
@@ -128,6 +133,28 @@ app.innerHTML = `
       </div>
     </article>
 
+    <article class="panel disk-panel">
+      <div class="panel-heading">
+        <div>
+          <h2>D64 Disk Image</h2>
+          <p>Browse a 1541 D64 and host-load PRGs directly. This accelerated path is intentionally separate from the physical IEC bus and is not 1541 emulation.</p>
+        </div>
+        <div id="d64-status" class="status-pill">No disk mounted</div>
+      </div>
+      <div class="disk-controls">
+        <input id="d64-file" type="file" accept=".d64,application/octet-stream" />
+        <label>
+          PRG file
+          <select id="d64-prg" disabled>
+            <option value="">No PRG available</option>
+          </select>
+        </label>
+        <button id="load-d64-prg" disabled>Host-assisted Load</button>
+        <button id="run-d64-prg" disabled>Host-assisted Load + Jump</button>
+      </div>
+      <pre id="d64-directory" class="disk-directory">Mount a D64 to browse its directory.</pre>
+    </article>
+
     <section class="grid">
       <article class="panel">
         <h2>6510</h2>
@@ -165,6 +192,8 @@ const vicPositionElement = mustElement('vic-position');
 const inputStatusElement = mustElement('input-status');
 const prgStatusElement = mustElement('prg-status');
 const audioStatusElement = mustElement('audio-status');
+const d64StatusElement = mustElement('d64-status');
+const d64DirectoryElement = mustElement('d64-directory');
 const programPanel = mustElement('program-panel');
 const vicCanvas = mustCanvas('vic-screen');
 const vicContext = must2dContext(vicCanvas);
@@ -180,6 +209,10 @@ const runFrameButton = mustButton('run-frame');
 const loadPrgButton = mustButton('load-prg');
 const runPrgButton = mustButton('run-prg');
 const prgInput = mustInput('prg-file');
+const d64Input = mustInput('d64-file');
+const d64PrgSelect = mustSelect('d64-prg');
+const loadD64PrgButton = mustButton('load-d64-prg');
+const runD64PrgButton = mustButton('run-d64-prg');
 const joystickSelect = mustSelect('joystick-capture');
 const sidModelSelect = mustSelect('sid-model');
 const audioEnableButton = mustButton('audio-enable');
@@ -323,6 +356,25 @@ prgInput.addEventListener('change', async () => {
 loadPrgButton.addEventListener('click', () => loadSelectedPrg(false));
 runPrgButton.addEventListener('click', () => loadSelectedPrg(true));
 
+d64Input.addEventListener('change', async () => {
+  const file = d64Input.files?.[0];
+  if (file === undefined) {
+    clearMountedD64();
+    updateControls();
+    return;
+  }
+  await mountD64(file);
+});
+
+d64PrgSelect.addEventListener('change', () => {
+  const selectedIndex = Number.parseInt(d64PrgSelect.value, 10);
+  selectedD64Prg = mountedD64?.entries.find((entry) => entry.directoryIndex === selectedIndex && entry.fileType === 'PRG') ?? null;
+  updateControls();
+});
+
+loadD64PrgButton.addEventListener('click', () => loadSelectedD64Prg(false));
+runD64PrgButton.addEventListener('click', () => loadSelectedD64Prg(true));
+
 programPanel.addEventListener('dragover', (event) => {
   event.preventDefault();
   programPanel.classList.add('drop-active');
@@ -395,6 +447,7 @@ document.addEventListener('visibilitychange', () => {
 
 updateControls();
 updatePrgStatus();
+clearMountedD64();
 updateInputStatus();
 render();
 
@@ -508,6 +561,104 @@ function loadSelectedPrg(jumpToLoadAddress: boolean): void {
   render();
 }
 
+async function mountD64(file: File): Promise<void> {
+  try {
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    const image = parseD64(bytes);
+    const entries = image.listDirectory();
+    mountedD64 = { name: file.name, image, entries };
+    selectedD64Prg = entries.find((entry) => entry.fileType === 'PRG') ?? null;
+    lastError = '';
+    renderD64Directory();
+  } catch (error) {
+    clearMountedD64();
+    lastError = errorMessage(error);
+  }
+
+  updateControls();
+  render();
+}
+
+function clearMountedD64(): void {
+  mountedD64 = null;
+  selectedD64Prg = null;
+  d64StatusElement.textContent = 'No disk mounted';
+  d64StatusElement.title = '';
+  d64StatusElement.classList.remove('ready');
+  d64DirectoryElement.textContent = 'Mount a D64 to browse its directory.';
+  d64PrgSelect.replaceChildren(new Option('No PRG available', ''));
+  d64PrgSelect.disabled = true;
+}
+
+function renderD64Directory(): void {
+  if (mountedD64 === null) {
+    clearMountedD64();
+    return;
+  }
+
+  const { image, entries, name } = mountedD64;
+  const geometry = image.geometry;
+  const diskName = image.header.name === '' ? '(unnamed)' : image.header.name;
+  d64StatusElement.textContent = `${diskName} · ${geometry.tracks} tracks · ${entries.length} files`;
+  d64StatusElement.title = `${name}${image.header.id === '' ? '' : ` · ID ${image.header.id}`}`;
+  d64StatusElement.classList.add('ready');
+
+  d64DirectoryElement.textContent = entries.length === 0
+    ? 'Directory is empty.'
+    : entries.map((entry) => formatD64DirectoryEntry(entry)).join('\n');
+
+  const prgs = entries.filter((entry) => entry.fileType === 'PRG');
+  d64PrgSelect.replaceChildren();
+  if (prgs.length === 0) {
+    d64PrgSelect.add(new Option('No PRG files', ''));
+    d64PrgSelect.disabled = true;
+    selectedD64Prg = null;
+    return;
+  }
+
+  for (const entry of prgs) {
+    d64PrgSelect.add(new Option(`${entry.filename} (${entry.blocks} blocks)`, String(entry.directoryIndex)));
+  }
+  d64PrgSelect.disabled = false;
+  const selected = selectedD64Prg ?? prgs[0]!;
+  selectedD64Prg = selected;
+  d64PrgSelect.value = String(selected.directoryIndex);
+}
+
+function loadSelectedD64Prg(jumpToLoadAddress: boolean): void {
+  if (!poweredOn || mountedD64 === null || selectedD64Prg === null) {
+    return;
+  }
+
+  try {
+    const bytes = mountedD64.image.readPrg(selectedD64Prg);
+    const result = machine.loadPrg(bytes);
+    const prefix = `D64 HOST LOAD "${selectedD64Prg.filename}" -> $${hex(result.loadAddress, 4)}-$${hex(result.endAddressExclusive - 1, 4)}`;
+
+    if (jumpToLoadAddress) {
+      machine.startAt(result.loadAddress);
+      traceLines.push(`${prefix}; PC=$${hex(result.loadAddress, 4)}`);
+      setRunning(true);
+    } else {
+      traceLines.push(prefix + (result.basicPointersInitialized ? ' (BASIC pointers updated)' : ''));
+    }
+
+    lastError = '';
+    vicCanvas.focus();
+  } catch (error) {
+    fail(error);
+  }
+
+  updateControls();
+  render();
+}
+
+function formatD64DirectoryEntry(entry: D64DirectoryEntry): string {
+  const blocks = String(entry.blocks).padStart(4, ' ');
+  const flags = `${entry.closed ? ' ' : '*'}${entry.locked ? '<' : ' '}`;
+  return `${blocks}  "${entry.filename}" ${entry.fileType}${flags}`;
+}
+
 async function tryStartAudio(): Promise<void> {
   try {
     await sidAudio.start();
@@ -572,6 +723,7 @@ function render(): void {
     `JOY2 PINS     %${machine.bus.io.joystick2InputPins.toString(2).padStart(8, '0')}`,
     '',
     `CIA2 PA       $${hex(machine.bus.io.cia2.portAPins, 2)}`,
+    `IEC A/C/D      ${iecLine(machine.bus.iec.atnHigh)} / ${iecLine(machine.bus.iec.clockHigh)} / ${iecLine(machine.bus.iec.dataHigh)}`,
     `VIC BANK      ${machine.bus.vicBankNumber} ($${hex(machine.bus.vicBankBase, 4)})`,
     '',
     `RASTER        ${vic.rasterLine}:${vic.rasterCycle}`,
@@ -664,6 +816,8 @@ function updateControls(): void {
   runFrameButton.disabled = !poweredOn || running;
   loadPrgButton.disabled = !poweredOn || selectedPrg === null;
   runPrgButton.disabled = !poweredOn || selectedPrg === null;
+  loadD64PrgButton.disabled = !poweredOn || mountedD64 === null || selectedD64Prg === null;
+  runD64PrgButton.disabled = !poweredOn || mountedD64 === null || selectedD64Prg === null;
   runToggleButton.textContent = running ? 'Pause' : 'Run';
 }
 
@@ -729,6 +883,10 @@ function joystickCaptureFromValue(value: string): JoystickCapturePort {
   if (value === '1') return 1;
   if (value === '2') return 2;
   return null;
+}
+
+function iecLine(high: boolean): string {
+  return high ? 'HIGH' : 'LOW';
 }
 
 function bit(value: boolean): string {

@@ -2,7 +2,7 @@
 
 A from-scratch Commodore 64 emulator written in TypeScript for the browser.
 
-Version **0.9.0** hardens compatibility: stable NMOS undocumented 6510 opcodes, penultimate-cycle interrupt sampling, JAM/KIL behavior, shared data-bus/open-bus state, tighter VIC raster IRQ timing, and coherent PAL/NTSC machine profiles.
+Version **0.10.0** adds usable D64 disk-image browsing/extraction and the physical serial IEC bus foundation needed for later true 1541 emulation, while retaining the v0.9 CPU/VIC/SID compatibility work.
 
 ## Current Capabilities
 
@@ -83,6 +83,22 @@ Version **0.9.0** hardens compatibility: stable NMOS undocumented 6510 opcodes, 
 - explicit machine-code “load + jump to load address” action
 - file picker and drag/drop browser workflow
 
+### D64 Disk Images and IEC
+
+- standard 35-track D64 images (683 sectors / 174,848 bytes)
+- common 40- and 42-track D64 extensions
+- optional one-byte-per-sector D64 error tables
+- BAM disk name/ID/DOS metadata
+- linked directory traversal beginning at 18/1
+- DEL/SEQ/PRG/USR/REL type decoding and file flags
+- loop- and bounds-safe linked file extraction
+- PRG extraction retains the native two-byte load-address header
+- browser directory browser and host-assisted PRG load/jump workflow
+- open-collector serial IEC ATN/CLOCK/DATA bus abstraction
+- real C64 CIA2 PA3/PA4/PA5 inverted output wiring
+- real CIA2 PA6/PA7 CLOCK/DATA input feedback
+- explicit separation between host-assisted D64 access and future true-drive IEC traffic
+
 ### Browser Runtime
 
 - continuous Run/Pause mode paced from the VIC timing profile
@@ -124,8 +140,10 @@ Version **0.9.0** hardens compatibility: stable NMOS undocumented 6510 opcodes, 
 - older 6567R56A NTSC profile and deeper per-revision VIC timing
 - full transistor/op-amp-level 6581 filter calibration and per-chip variation
 - exact SID POT RC conversion timing and analog noise/distortion floor
-- IEC bus and 1541
-- T64/D64 loading
+- cycle-accurate 1541 CPU/VIA/GCR drive emulation
+- KERNAL LOAD over the physical IEC handshake / fast-loader compatibility
+- D64 write-back, SAVE, REL/SEQ host operations, and BAM mutation
+- T64/TAP loading and datasette
 - cartridges/GAME/EXROM
 - chip-specific modeling for unstable XAA/LXA/AHX/TAS/SHX/SHY opcodes
 - BRK/IRQ vector hijacking and the remaining interrupt race edge cases
@@ -155,6 +173,8 @@ After loading all three ROMs, click **Power On**. The machine starts at the real
 
 For a BASIC `.PRG`, wait until the ROM reaches `READY.`, load the file, then type `RUN`. Use **Load + Jump to Address** only for machine-code files whose entry point is intentionally the PRG load address.
 
+A `.D64` may also be mounted in the browser. Its directory is parsed from the image and PRG files can be sent through the same loader using **Host-assisted Load**. That convenience path is deliberately labeled: it does not yet emulate the 1541 CPU or transfer bytes through IEC.
+
 ## Build
 
 ```bash
@@ -179,11 +199,11 @@ The Klaus Dormann functional test remains optional. If you possess the 64 KiB `6
 tests/assets/6502_functional_test.bin
 ```
 
-## v0.9 Architecture
+## v0.10 Architecture
 
 ```text
 Browser adapters
- ROM / PRG   keyboard / joystick / RESTORE   frame pacing
+ ROM / PRG / D64   keyboard / joystick / RESTORE   frame pacing
      \             |                            /
       \            |                           /
        +-------------+--------------------------+
@@ -197,19 +217,20 @@ Browser adapters
         +------------+-------------+
         |            |             |
       Cpu6510      VIC-II       CIA1/CIA2
-        |          BA/AEC          |
-        +------------+-------------+
+        |          BA/AEC          |     |
+        +------------+-------------+     +--> IEC ATN/CLK/DATA
                      |
                    C64Bus
-                     |
-                SID 6581/8580
-              voices + ADSR + filter
-                     |
-              deterministic PCM
-                     |
-           browser SidAudio adapter
-                     |
-                 AudioWorklet
+                  /      \
+                RAM      SID 6581/8580
+                 ^          |
+                 |       voices + ADSR + filter
+          host-assisted     |
+          D64/PRG load   deterministic PCM
+                            |
+                 browser SidAudio adapter
+                            |
+                        AudioWorklet
 ```
 
 ## Documentation Rule
