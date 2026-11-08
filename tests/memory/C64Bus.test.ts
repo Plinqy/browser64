@@ -193,3 +193,40 @@ describe('C64Bus VIC-II memory view', () => {
     }
   });
 });
+
+describe('C64Bus CPU data-bus/open-bus behavior', () => {
+  it('returns the last CPU bus value from undriven expansion I/O', () => {
+    const bus = new C64Bus();
+
+    bus.write(0x2000, 0xa5);
+    expect(bus.systemDataBusValue).toBe(0xa5);
+    expect(bus.read(0xde00)).toBe(0xa5);
+  });
+
+  it('lets a VIC memory fetch refresh the shared open-bus latch', () => {
+    const bus = new C64Bus();
+    bus.writePhysicalRam(0x0200, 0x6c);
+
+    expect(bus.readVicMemory(0x0200)).toBe(0x6c);
+    expect(bus.read(0xde00)).toBe(0x6c);
+  });
+
+  it('merges color RAM low bits with the previous CPU bus high nibble', () => {
+    const bus = new C64Bus();
+    bus.io.colorRam.write(0, 0x0b);
+
+    bus.write(0x2000, 0xa5);
+    expect(bus.read(0xd800)).toBe(0xab);
+    expect(bus.systemDataBusValue).toBe(0xab);
+  });
+
+  it('keeps debugger peeks side-effect free with respect to the bus latch', () => {
+    const bus = new C64Bus();
+
+    bus.write(0x2000, 0x5a);
+    bus.writePhysicalRam(0x3000, 0xc3);
+    expect(bus.peek(0x3000)).toBe(0xc3);
+    expect(bus.systemDataBusValue).toBe(0x5a);
+    expect(bus.peek(0xde00)).toBe(0x5a);
+  });
+});

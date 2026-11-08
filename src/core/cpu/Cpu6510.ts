@@ -33,8 +33,26 @@ interface AddressLatch {
 
 export class UnsupportedOpcodeError extends Error {
   constructor(public readonly opcode: number, public readonly address: number) {
-    super(`Unsupported/undocumented opcode $${hex(opcode, 2)} at $${hex(address, 4)}`);
+    super(`Unsupported opcode $${hex(opcode, 2)} at $${hex(address, 4)}`);
     this.name = 'UnsupportedOpcodeError';
+  }
+}
+
+export class UnstableOpcodeError extends Error {
+  constructor(
+    public readonly opcode: number,
+    public readonly mnemonic: Mnemonic,
+    public readonly address: number
+  ) {
+    super(`Unstable NMOS opcode ${mnemonic} ($${hex(opcode, 2)}) at $${hex(address, 4)} requires a chip/bus-specific model.`);
+    this.name = 'UnstableOpcodeError';
+  }
+}
+
+export class CpuJammedError extends Error {
+  constructor(public readonly address: number) {
+    super(`6510 is JAMmed at $${hex(address, 4)}; hardware RESET is required.`);
+    this.name = 'CpuJammedError';
   }
 }
 
@@ -42,11 +60,11 @@ export class UnsupportedOpcodeError extends Error {
  * Cycle-steppable NMOS 6502 execution core used as the computational heart of
  * the MOS 6510.
  *
- * v0.5 schedules every documented instruction as explicit read/write bus
- * micro-operations. clock() advances exactly one CPU bus cycle and can hold a
- * read cycle when RDY is low. This is the behavior the C64 needs when VIC-II
- * pulls BA low before taking AEC during bad-line DMA. Write cycles are never
- * held by RDY, matching NMOS 6502/6510 behavior.
+ * Instructions are scheduled as explicit read/write bus micro-operations.
+ * v0.9 extends the core with the stable NMOS undocumented opcode families and
+ * end-of-penultimate-cycle IRQ/NMI sampling, including the one-instruction
+ * CLI/SEI/PLP interrupt-mask latency. RDY arrests reads but not writes; AEC
+ * denies both directions when VIC-II owns the external bus.
  *
  * step() remains as a compatibility convenience: it clocks with RDY high until
  * one instruction or interrupt sequence completes, preserving the public API
@@ -65,6 +83,12 @@ export class Cpu6510 {
   private nmiPending = false;
   private microOps: CpuMicroOperation[] = [];
   private instructionActive = false;
+  private sequencePollsInterrupts = false;
+  private interruptPollValid = false;
+  private sampledIrq = false;
+  private sampledNmi = false;
+  private jammedValue = false;
+  private jamAddress = 0;
 
   constructor(public readonly bus: Bus) {}
 
@@ -78,6 +102,12 @@ export class Cpu6510 {
     this.nmiPending = false;
     this.microOps = [];
     this.instructionActive = false;
+    this.sequencePollsInterrupts = false;
+    this.interruptPollValid = false;
+    this.sampledIrq = false;
+    this.sampledNmi = false;
+    this.jammedValue = false;
+    this.jamAddress = 0;
     this.pc = this.readWord(0xfffc);
     this.cycles = 7;
     return 7;
@@ -136,6 +166,11 @@ export class Cpu6510 {
     return this.instructionActive || this.microOps.length > 0;
   }
 
+  /** True after a JAM/KIL opcode; only reset() releases the NMOS core. */
+  get jammed(): boolean {
+    return this.jammedValue;
+  }
+
   /**
    * Advance one CPU bus cycle.
    *
@@ -143,6 +178,15 @@ export class Cpu6510 {
    * write, the write completes and the CPU proceeds to the following cycle.
    */
   clock(rdyHigh = true, aecHigh = true): CpuClockResult {
+    if (this.jammedValue) {
+      return {
+        advanced: false,
+        stalled: true,
+        kind: 'read',
+        instructionCompleted: false
+      };
+    }
+
     if (this.microOps.length === 0) {
       this.beginBoundarySequence();
     }
@@ -161,6 +205,14 @@ export class Cpu6510 {
     operation.run();
     this.cycles += 1;
 
+    // NMOS 6502 IRQ/NMI recognition is based on the interrupt state sampled
+    // at the end of the second-to-last cycle. Dynamic page-cross/branch cycles
+    // can extend an instruction, so a later penultimate cycle simply replaces
+    // an earlier provisional sample.
+    if (this.sequencePollsInterrupts && this.microOps.length === 1) {
+      this.sampleInterrupts();
+    }
+
     const instructionCompleted = this.microOps.length === 0;
     if (instructionCompleted) {
       this.instructionActive = false;
@@ -175,6 +227,10 @@ export class Cpu6510 {
   }
 
   step(): number {
+    if (this.jammedValue) {
+      throw new CpuJammedError(this.jamAddress);
+    }
+
     const startingCycles = this.cycles;
     let completed = false;
 
@@ -203,17 +259,28 @@ export class Cpu6510 {
   private beginBoundarySequence(): void {
     this.instructionActive = true;
 
-    if (this.nmiPending) {
+    const takeNmi = this.interruptPollValid ? this.sampledNmi : this.nmiPending;
+    const takeIrq = this.interruptPollValid
+      ? this.sampledIrq
+      : this.irqLine && !this.getFlag(Flag.InterruptDisable);
+
+    this.interruptPollValid = false;
+    this.sampledNmi = false;
+    this.sampledIrq = false;
+    this.sequencePollsInterrupts = false;
+
+    if (takeNmi) {
       this.nmiPending = false;
       this.scheduleHardwareInterrupt(0xfffa);
       return;
     }
 
-    if (this.irqLine && !this.getFlag(Flag.InterruptDisable)) {
+    if (takeIrq) {
       this.scheduleHardwareInterrupt(0xfffe);
       return;
     }
 
+    this.sequencePollsInterrupts = true;
     this.enqueueRead(() => {
       const opcodeAddress = this.pc;
       const opcode = this.bus.read(this.pc);
@@ -224,8 +291,18 @@ export class Cpu6510 {
         throw new UnsupportedOpcodeError(opcode, opcodeAddress);
       }
 
+      if (info.stability === 'unstable-undocumented') {
+        throw new UnstableOpcodeError(opcode, info.mnemonic, opcodeAddress);
+      }
+
       this.scheduleInstruction(info);
     });
+  }
+
+  private sampleInterrupts(): void {
+    this.sampledNmi = this.nmiPending;
+    this.sampledIrq = this.irqLine && !this.getFlag(Flag.InterruptDisable);
+    this.interruptPollValid = true;
   }
 
   private scheduleInstruction(info: OpcodeInfo): void {
@@ -235,6 +312,7 @@ export class Cpu6510 {
       case 'JSR': this.scheduleJsr(); return;
       case 'RTS': this.scheduleRts(); return;
       case 'RTI': this.scheduleRti(); return;
+      case 'JAM': this.scheduleJam(); return;
       case 'PHA': this.schedulePush(() => this.a); return;
       case 'PHP': this.schedulePush(() => this.status | Flag.Break | Flag.Unused); return;
       case 'PLA': this.schedulePull((value) => { this.a = this.setNZ(value); }); return;
@@ -251,13 +329,28 @@ export class Cpu6510 {
         break;
     }
 
+    if (info.mnemonic === 'SAX') {
+      this.scheduleStoreValue(info.mode, () => this.a & this.x);
+      return;
+    }
+
     if (isStoreMnemonic(info.mnemonic)) {
       this.scheduleStore(info.mode, info.mnemonic);
       return;
     }
 
+    if (isUndocumentedRmwMnemonic(info.mnemonic)) {
+      this.scheduleUndocumentedRmw(info.mode, info.mnemonic);
+      return;
+    }
+
     if (isMemoryRmwMnemonic(info.mnemonic) && info.mode !== 'ACC') {
       this.scheduleMemoryRmw(info.mode, info.mnemonic);
+      return;
+    }
+
+    if (info.mnemonic === 'NOP' && info.mode !== 'IMP') {
+      this.scheduleReadOperand(info.mode, () => {});
       return;
     }
 
@@ -368,7 +461,6 @@ export class Cpu6510 {
   }
 
   private scheduleStore(mode: AddressingMode, mnemonic: 'STA' | 'STX' | 'STY'): void {
-    const latch = freshLatch();
     const value = (): number => {
       switch (mnemonic) {
         case 'STA': return this.a;
@@ -377,6 +469,11 @@ export class Cpu6510 {
         default: return assertNever(mnemonic);
       }
     };
+    this.scheduleStoreValue(mode, value);
+  }
+
+  private scheduleStoreValue(mode: AddressingMode, value: () => number): void {
+    const latch = freshLatch();
 
     switch (mode) {
       case 'ZP':
@@ -452,10 +549,21 @@ export class Cpu6510 {
   }
 
   private scheduleMemoryRmw(mode: AddressingMode, mnemonic: 'ASL' | 'DEC' | 'INC' | 'LSR' | 'ROL' | 'ROR'): void {
+    this.scheduleRmw(mode, (value) => this.transformRmw(mnemonic, value));
+  }
+
+  private scheduleUndocumentedRmw(
+    mode: AddressingMode,
+    mnemonic: 'SLO' | 'RLA' | 'SRE' | 'RRA' | 'DCP' | 'ISC'
+  ): void {
+    this.scheduleRmw(mode, (value) => this.transformUndocumentedRmw(mnemonic, value));
+  }
+
+  private scheduleRmw(mode: AddressingMode, transform: (value: number) => number): void {
     const latch = freshLatch();
     const readValue = (): void => { latch.value = this.bus.read(latch.address); };
     const writeOld = (): void => { this.bus.write(latch.address, latch.value); };
-    const writeNew = (): void => { this.bus.write(latch.address, this.transformRmw(mnemonic, latch.value)); };
+    const writeNew = (): void => { this.bus.write(latch.address, transform(latch.value)); };
 
     switch (mode) {
       case 'ZP':
@@ -484,9 +592,49 @@ export class Cpu6510 {
         this.enqueueWrite(writeNew);
         return;
       case 'ABSX':
+      case 'ABSY': {
+        const index = mode === 'ABSX' ? () => this.x : () => this.y;
         this.fetchAbsoluteBase(latch);
         this.enqueueRead(() => {
-          latch.address = (latch.base + this.x) & 0xffff;
+          latch.address = (latch.base + index()) & 0xffff;
+          const provisional = (latch.base & 0xff00) | (latch.address & 0x00ff);
+          this.bus.read(provisional);
+        });
+        this.enqueueRead(readValue);
+        this.enqueueWrite(writeOld);
+        this.enqueueWrite(writeNew);
+        return;
+      }
+      case 'INDX':
+        this.enqueueRead(() => {
+          latch.pointer = this.bus.read(this.pc);
+          this.pc = (this.pc + 1) & 0xffff;
+        });
+        this.enqueueRead(() => {
+          this.bus.read(latch.pointer);
+          latch.pointer = (latch.pointer + this.x) & 0xff;
+        });
+        this.enqueueRead(() => { latch.lo = this.bus.read(latch.pointer); });
+        this.enqueueRead(() => {
+          latch.hi = this.bus.read((latch.pointer + 1) & 0xff);
+          latch.address = word(latch.lo, latch.hi);
+        });
+        this.enqueueRead(readValue);
+        this.enqueueWrite(writeOld);
+        this.enqueueWrite(writeNew);
+        return;
+      case 'INDY':
+        this.enqueueRead(() => {
+          latch.pointer = this.bus.read(this.pc);
+          this.pc = (this.pc + 1) & 0xffff;
+        });
+        this.enqueueRead(() => { latch.lo = this.bus.read(latch.pointer); });
+        this.enqueueRead(() => {
+          latch.hi = this.bus.read((latch.pointer + 1) & 0xff);
+          latch.base = word(latch.lo, latch.hi);
+        });
+        this.enqueueRead(() => {
+          latch.address = (latch.base + this.y) & 0xffff;
           const provisional = (latch.base & 0xff00) | (latch.address & 0x00ff);
           this.bus.read(provisional);
         });
@@ -621,6 +769,7 @@ export class Cpu6510 {
   }
 
   private scheduleBrk(): void {
+    this.sequencePollsInterrupts = false;
     const latch = freshLatch();
     this.enqueueRead(() => {
       this.bus.read(this.pc);
@@ -640,6 +789,7 @@ export class Cpu6510 {
   }
 
   private scheduleHardwareInterrupt(vectorAddress: number): void {
+    this.sequencePollsInterrupts = false;
     const latch = freshLatch();
     // Hardware IRQ/NMI consumes seven cycles. The first two are discarded reads
     // from the current PC, followed by the three stack writes and vector reads.
@@ -655,6 +805,16 @@ export class Cpu6510 {
     this.enqueueRead(() => {
       latch.hi = this.bus.read((vectorAddress + 1) & 0xffff);
       this.pc = word(latch.lo, latch.hi);
+    });
+  }
+
+  private scheduleJam(): void {
+    this.sequencePollsInterrupts = false;
+    const address = (this.pc - 1) & 0xffff;
+    this.enqueueRead(() => {
+      this.bus.read(this.pc);
+      this.jamAddress = address;
+      this.jammedValue = true;
     });
   }
 
@@ -713,9 +873,35 @@ export class Cpu6510 {
       case 'CPY': this.compare(this.y, value); break;
       case 'EOR': this.a = this.setNZ(this.a ^ value); break;
       case 'LDA': this.a = this.setNZ(value); break;
+      case 'LAX': this.a = this.x = this.setNZ(value); break;
+      case 'LAS': {
+        const result = this.setNZ(value & this.sp);
+        this.a = result;
+        this.x = result;
+        this.sp = result;
+        break;
+      }
       case 'LDX': this.x = this.setNZ(value); break;
       case 'LDY': this.y = this.setNZ(value); break;
       case 'ORA': this.a = this.setNZ(this.a | value); break;
+      case 'ANC':
+        this.a = this.setNZ(this.a & value);
+        this.setFlag(Flag.Carry, (this.a & 0x80) !== 0);
+        break;
+      case 'ALR': {
+        const anded = this.a & value;
+        this.setFlag(Flag.Carry, (anded & 0x01) !== 0);
+        this.a = this.setNZ(anded >> 1);
+        break;
+      }
+      case 'ARR': this.arr(value); break;
+      case 'AXS': {
+        const combined = this.a & this.x;
+        const difference = combined - value;
+        this.setFlag(Flag.Carry, difference >= 0);
+        this.x = this.setNZ(difference);
+        break;
+      }
       case 'SBC': this.sbc(value); break;
       default: throw new Error(`${mnemonic} is not a read-class instruction.`);
     }
@@ -746,6 +932,46 @@ export class Cpu6510 {
       case 'TXS': this.sp = this.x; break;
       case 'TYA': this.a = this.setNZ(this.y); break;
       default: throw new Error(`${mnemonic} is not an implied/accumulator instruction.`);
+    }
+  }
+
+  private transformUndocumentedRmw(
+    operation: 'SLO' | 'RLA' | 'SRE' | 'RRA' | 'DCP' | 'ISC',
+    value: number
+  ): number {
+    switch (operation) {
+      case 'SLO': {
+        const result = this.transformRmw('ASL', value);
+        this.a = this.setNZ(this.a | result);
+        return result;
+      }
+      case 'RLA': {
+        const result = this.transformRmw('ROL', value);
+        this.a = this.setNZ(this.a & result);
+        return result;
+      }
+      case 'SRE': {
+        const result = this.transformRmw('LSR', value);
+        this.a = this.setNZ(this.a ^ result);
+        return result;
+      }
+      case 'RRA': {
+        const result = this.transformRmw('ROR', value);
+        this.adc(result);
+        return result;
+      }
+      case 'DCP': {
+        const result = (value - 1) & 0xff;
+        this.compare(this.a, result);
+        return result;
+      }
+      case 'ISC': {
+        const result = (value + 1) & 0xff;
+        this.sbc(result);
+        return result;
+      }
+      default:
+        return assertNever(operation);
     }
   }
 
@@ -844,6 +1070,37 @@ export class Cpu6510 {
     this.a = ((high << 4) | (low & 0x0f)) & 0xff;
   }
 
+  private arr(value: number): void {
+    const anded = this.a & value;
+    const carryIn = this.getFlag(Flag.Carry) ? 1 : 0;
+    let result = ((anded >> 1) | (carryIn << 7)) & 0xff;
+
+    if (!this.getFlag(Flag.Decimal)) {
+      this.a = this.setNZ(result);
+      this.setFlag(Flag.Carry, (result & 0x40) !== 0);
+      this.setFlag(Flag.Overflow, (((result >> 6) ^ (result >> 5)) & 0x01) !== 0);
+      return;
+    }
+
+    // NMOS decimal ARR performs N/Z/V from the pre-adjusted rotate result,
+    // then applies two unusual BCD corrections derived from the AND result.
+    this.setNZ(result);
+    this.setFlag(Flag.Overflow, ((anded ^ result) & 0x40) !== 0);
+
+    const low = anded & 0x0f;
+    const high = (anded >> 4) & 0x0f;
+    if (low + (low & 0x01) > 5) {
+      result = (result & 0xf0) | ((result + 0x06) & 0x0f);
+    }
+
+    const carryOut = high + (high & 0x01) > 5;
+    if (carryOut) {
+      result = (result + 0x60) & 0xff;
+    }
+    this.setFlag(Flag.Carry, carryOut);
+    this.a = result;
+  }
+
   private bit(value: number): void {
     this.setFlag(Flag.Zero, (this.a & value) === 0);
     this.setFlag(Flag.Negative, (value & 0x80) !== 0);
@@ -895,11 +1152,18 @@ function isReadMnemonic(mnemonic: Mnemonic): boolean {
   return mnemonic === 'ADC' || mnemonic === 'AND' || mnemonic === 'BIT'
     || mnemonic === 'CMP' || mnemonic === 'CPX' || mnemonic === 'CPY'
     || mnemonic === 'EOR' || mnemonic === 'LDA' || mnemonic === 'LDX'
-    || mnemonic === 'LDY' || mnemonic === 'ORA' || mnemonic === 'SBC';
+    || mnemonic === 'LDY' || mnemonic === 'ORA' || mnemonic === 'SBC'
+    || mnemonic === 'LAX' || mnemonic === 'LAS' || mnemonic === 'ANC'
+    || mnemonic === 'ALR' || mnemonic === 'ARR' || mnemonic === 'AXS';
 }
 
 function isStoreMnemonic(mnemonic: Mnemonic): mnemonic is 'STA' | 'STX' | 'STY' {
   return mnemonic === 'STA' || mnemonic === 'STX' || mnemonic === 'STY';
+}
+
+function isUndocumentedRmwMnemonic(mnemonic: Mnemonic): mnemonic is 'SLO' | 'RLA' | 'SRE' | 'RRA' | 'DCP' | 'ISC' {
+  return mnemonic === 'SLO' || mnemonic === 'RLA' || mnemonic === 'SRE'
+    || mnemonic === 'RRA' || mnemonic === 'DCP' || mnemonic === 'ISC';
 }
 
 function isMemoryRmwMnemonic(mnemonic: Mnemonic): mnemonic is 'ASL' | 'DEC' | 'INC' | 'LSR' | 'ROL' | 'ROR' {

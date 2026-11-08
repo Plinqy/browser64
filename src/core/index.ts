@@ -1,8 +1,8 @@
-export { Cpu6510, UnsupportedOpcodeError } from './cpu/Cpu6510';
+export { Cpu6510, CpuJammedError, UnstableOpcodeError, UnsupportedOpcodeError } from './cpu/Cpu6510';
 export type { CpuClockResult, CpuCycleKind } from './cpu/Cpu6510';
 export { Flag } from './cpu/Flags';
-export { OFFICIAL_OPCODE_COUNT, OPCODES, getOpcodeInfo } from './cpu/opcodes';
-export type { AddressingMode, CpuSnapshot, Mnemonic, OpcodeInfo } from './cpu/types';
+export { IMPLEMENTED_OPCODE_COUNT, OFFICIAL_OPCODE_COUNT, OPCODES, UNSTABLE_OPCODE_COUNT, getOpcodeInfo } from './cpu/opcodes';
+export type { AddressingMode, CpuSnapshot, Mnemonic, OpcodeInfo, OpcodeStability } from './cpu/types';
 export { Cia6526, CiaInterrupt } from './cia/Cia6526';
 export { KeyboardMatrix } from './cia/KeyboardMatrix';
 export type { Bus } from './memory/Bus';

@@ -3,7 +3,7 @@ export type SidChipModel = '6581' | '8580';
 /** PAL-B C64 master/SID clock used by the current VIC profile. */
 export const PAL_SID_CLOCK_HZ = 985_248;
 
-/** NTSC-M clock for future machine-profile wiring. */
+/** NTSC-M C64 master/SID clock used by the NTSC machine profile. */
 export const NTSC_SID_CLOCK_HZ = 1_022_727;
 
 export interface SidModelCharacteristics {

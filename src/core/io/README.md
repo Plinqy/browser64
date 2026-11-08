@@ -2,7 +2,7 @@
 
 ## Overview
 
-This directory owns CPU-visible device routing for the `$D000-$DFFF` C64 I/O window. As of v0.8 the VIC-II, SID, and both CIA regions contain functional device models. Color RAM is dedicated 4-bit memory rather than a normal chip register bank.
+This directory owns CPU-visible device routing for the `$D000-$DFFF` C64 I/O window. As of v0.9 the VIC-II, SID, and both CIA regions contain functional device models. Color RAM is dedicated 4-bit memory rather than a normal chip register bank.
 
 ## Architecture
 
@@ -24,10 +24,10 @@ The VIC-II receives a `VicMemory` provider from `C64Bus`; it does not read throu
 
 `C64Io.tick()` advances VIC-II, SID, and both CIAs. `C64Machine` invokes it one system cycle at a time so all timed I/O shares the master clock.
 
-The SID runs at the VIC/system timing profile clock, so every master system cycle advances oscillator, envelope, and filter state even when the 6510 is stalled by VIC DMA.
+The SID runs at the selected VIC/system timing profile clock, so PAL and 6567R8 NTSC machines advance oscillator, envelope, and filter state from the same clock definition even when the 6510 is stalled by VIC DMA.
 
 CIA1 remains wired to the keyboard matrix and active-low joystick pin images. v0.7 adds named up/down/left/right/fire setters for both joystick ports; those setters only manipulate the external active-low pin image and do not bypass CIA DDR/port resolution. CIA2 Port A bits 0-1 select the VIC bank through the real inverted mapping. IEC electrical behavior remains deferred.
 
-Color RAM stores only its low four bits and survives reset because it is RAM. Deterministic cold power-on clears it. Until an open-bus model exists, its undefined high nibble reads as `$F`.
+Color RAM stores only its low four bits and survives reset because it is RAM. Deterministic cold power-on clears it. On CPU reads, its undriven high nibble comes from the shared data-bus latch supplied by `C64Bus`.
 
-The expansion I/O areas use `OpenBusDevice`; `$FF` remains a deterministic temporary policy, not a claim about all real cartridge/open-bus conditions.
+The expansion I/O areas use `OpenBusDevice`; with no cartridge decoder attached they return that same shared latch. Standalone `C64Io` instances retain an `$FF` fallback so chip-local tests do not require a full motherboard.

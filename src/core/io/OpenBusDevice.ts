@@ -3,17 +3,19 @@ import type { MemoryMappedDevice } from './Device';
 /**
  * Placeholder for an unmapped expansion I/O area.
  *
- * $DE00-$DFFF is cartridge/expansion space. A real C64 can expose open-bus or
- * cartridge-specific values here. Until those systems exist, reads return $FF
- * and writes are ignored rather than inventing persistent registers.
+ * $DE00-$DFFF is cartridge/expansion space. With no cartridge decoding the
+ * region leaves the CPU data bus undriven, so reads observe the machine's
+ * current data-bus latch. Standalone use falls back to $FF.
  */
 export class OpenBusDevice implements MemoryMappedDevice {
+  constructor(private readonly busValue: () => number = () => 0xff) {}
+
   read(_offset: number): number {
-    return 0xff;
+    return this.busValue() & 0xff;
   }
 
   peek(_offset: number): number {
-    return 0xff;
+    return this.busValue() & 0xff;
   }
 
   write(_offset: number, _value: number): void {}

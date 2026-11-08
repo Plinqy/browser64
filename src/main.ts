@@ -37,7 +37,7 @@ app.innerHTML = `
     <header>
       <p class="eyebrow">FROM-SCRATCH C64 EMULATOR</p>
       <h1>Commodore 64 Development Console</h1>
-      <p>v0.8 — cycle-clocked MOS 6581/8580 SID synthesis, filters, model selection, and AudioWorklet output.</p>
+      <p>v0.9 — undocumented 6510 compatibility, interrupt timing, shared open-bus behavior, and PAL/NTSC profiles.</p>
     </header>
 
     <article class="panel rom-panel">

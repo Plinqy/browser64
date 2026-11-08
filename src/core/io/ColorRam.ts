@@ -3,15 +3,17 @@ import type { MemoryMappedDevice } from './Device';
 /**
  * The C64 has 1 KiB of dedicated 4-bit color RAM at $D800-$DBFF.
  *
- * Real hardware only drives the low nibble on reads; the upper nibble comes
- * from bus/open-bus behavior. Until the machine has an open-bus model, v0.2
- * returns ones in the high nibble so the undefined portion is deterministic.
+ * Real hardware only drives the low nibble on reads. v0.9 supplies the upper
+ * nibble from the CPU data-bus latch, while standalone instances retain the
+ * previous deterministic $F fallback.
  */
 export class ColorRam implements MemoryMappedDevice {
   public readonly memory = new Uint8Array(0x400);
 
+  constructor(private readonly busValue: () => number = () => 0xff) {}
+
   read(offset: number): number {
-    return 0xf0 | (this.memory[offset & 0x03ff] ?? 0);
+    return (this.busValue() & 0xf0) | (this.memory[offset & 0x03ff] ?? 0);
   }
 
   peek(offset: number): number {

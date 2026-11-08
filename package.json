@@ -1,9 +1,9 @@
 {
   "name": "c64-browser-emulator",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "private": true,
   "type": "module",
-  "description": "From-scratch browser Commodore 64 emulator \u2014 cycle-stepped 6510/VIC-II/CIA/SID core with ROM, input, PRG and AudioWorklet support",
+  "description": "From-scratch browser Commodore 64 emulator \u2014 cycle-stepped 6510/VIC-II/CIA/SID core with undocumented opcodes, interrupt timing, open-bus behavior, PAL/NTSC profiles, ROM/input/PRG/audio support",
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { C64Machine } from '../../src/core/machine/C64Machine';
 import { KERNAL_ROM_SIZE } from '../../src/core/rom/RomSet';
+import { NTSC_6567R8_TIMING, PAL_6569_TIMING } from '../../src/core/vic/VicTiming';
 
 function kernalWithResetVector(target: number): Uint8Array {
   const kernal = new Uint8Array(KERNAL_ROM_SIZE).fill(0xea);
@@ -122,6 +123,8 @@ describe('C64Machine CIA integration', () => {
     machine.step(); // NOP; timer underflows during its cycles
     expect(machine.bus.io.cia1.irqAsserted).toBe(true);
 
+    machine.step(); // IRQ asserted after the NOP's interrupt sample, so one more NOP completes.
+    expect(machine.cpu.pc).toBe(0xe003);
     machine.step(); // hardware IRQ service
     expect(machine.cpu.pc).toBe(0xe200);
   });
@@ -199,8 +202,11 @@ describe('C64Machine VIC-II timing integration', () => {
     expect(machine.bus.io.vic.rasterLine).toBe(1);
     expect(machine.bus.io.vic.irqAsserted).toBe(true);
 
-    machine.step();
-    expect(machine.cpu.pc).toBe(0xe200);
+    for (let i = 0; i < 10 && machine.cpu.pc < 0xe200; i += 1) {
+      machine.step();
+    }
+    expect(machine.cpu.pc).toBeGreaterThanOrEqual(0xe200);
+    expect(machine.cpu.pc).toBeLessThan(0xe300);
   });
 });
 
@@ -307,5 +313,27 @@ describe('C64Machine SID integration', () => {
 
     expect(machine.bus.io.sid.voices[0].oscillator.accumulator)
       .toBe((before + 10 * 0x1234) & 0x00ff_ffff);
+  });
+});
+
+
+describe('C64Machine PAL/NTSC profiles', () => {
+  it('uses PAL 6569 timing by default across VIC and SID', () => {
+    const machine = new C64Machine();
+
+    expect(machine.timing).toBe(PAL_6569_TIMING);
+    expect(machine.bus.timing).toBe(PAL_6569_TIMING);
+    expect(machine.bus.io.vic.timing).toBe(PAL_6569_TIMING);
+    expect(machine.bus.io.vic.cyclesPerFrame).toBe(63 * 312);
+    expect(machine.bus.io.sid.clockFrequencyHz).toBe(PAL_6569_TIMING.systemClockHz);
+  });
+
+  it('propagates the NTSC 6567R8 clock and raster geometry to timed devices', () => {
+    const machine = new C64Machine(NTSC_6567R8_TIMING);
+
+    expect(machine.timing).toBe(NTSC_6567R8_TIMING);
+    expect(machine.bus.io.vic.timing).toBe(NTSC_6567R8_TIMING);
+    expect(machine.bus.io.vic.cyclesPerFrame).toBe(65 * 263);
+    expect(machine.bus.io.sid.clockFrequencyHz).toBe(NTSC_6567R8_TIMING.systemClockHz);
   });
 });

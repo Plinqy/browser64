@@ -1,14 +1,17 @@
 import { describe, expect, it } from 'vitest';
-import { OFFICIAL_OPCODE_COUNT, OPCODES } from '../../src/core/cpu/opcodes';
+import { IMPLEMENTED_OPCODE_COUNT, OFFICIAL_OPCODE_COUNT, OPCODES, UNSTABLE_OPCODE_COUNT } from '../../src/core/cpu/opcodes';
 
-describe('official opcode table', () => {
+describe('NMOS 6502/6510 opcode table', () => {
   it('contains all 151 documented NMOS 6502 opcodes', () => {
     expect(OFFICIAL_OPCODE_COUNT).toBe(151);
   });
 
-  it('does not accidentally define an opcode twice or outside byte range', () => {
+  it('classifies every byte while separating unstable silicon-dependent opcodes', () => {
     const entries = OPCODES.filter((entry) => entry !== undefined);
-    expect(new Set(entries.map((entry) => entry.opcode)).size).toBe(151);
+    expect(entries).toHaveLength(256);
+    expect(new Set(entries.map((entry) => entry.opcode)).size).toBe(256);
+    expect(IMPLEMENTED_OPCODE_COUNT).toBe(249);
+    expect(UNSTABLE_OPCODE_COUNT).toBe(7);
     expect(entries.every((entry) => entry.opcode >= 0 && entry.opcode <= 0xff)).toBe(true);
   });
 
@@ -18,7 +21,7 @@ describe('official opcode table', () => {
       expect(entry.bytes).toBeGreaterThanOrEqual(1);
       expect(entry.bytes).toBeLessThanOrEqual(3);
       expect(entry.cycles).toBeGreaterThanOrEqual(2);
-      expect(entry.cycles).toBeLessThanOrEqual(7);
+      expect(entry.cycles).toBeLessThanOrEqual(8);
     }
   });
 });

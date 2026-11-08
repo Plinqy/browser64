@@ -1,5 +1,6 @@
 import { C64Io } from '../io/C64Io';
 import { C64Roms } from '../rom/RomSet';
+import { PAL_6569_TIMING, type VicTimingProfile } from '../vic/VicTiming';
 import type { Bus } from './Bus';
 
 export interface C64MemoryConfiguration {
@@ -18,7 +19,8 @@ export interface C64MemoryConfiguration {
  *
  * The bus also exposes the VIC's independent 14-bit memory view. VIC accesses
  * bypass CPU ROM/I/O banking and apply CIA2 bank selection plus VIC-specific
- * character-ROM shadowing.
+ * character-ROM shadowing. v0.9 additionally tracks the last CPU data value so
+ * genuinely undriven I/O and color-RAM upper bits have open-bus behavior.
  */
 export class C64Bus implements Bus {
   public readonly ram = new Uint8Array(0x10000);
@@ -27,21 +29,24 @@ export class C64Bus implements Bus {
 
   private dataDirection = 0x2f;
   private dataLatch = 0x37;
+  private dataBusLatch = 0xff;
 
   // Deterministic external pin levels. Bits 0-2 are high when configured as
   // inputs, matching the stock machine's pulled-up banking lines. Bit 4 is the
   // inactive Datasette switch sense. Undefined bits 6-7 stay low for now.
   private inputPins = 0x17;
 
-  constructor() {
+  constructor(public readonly timing: VicTimingProfile = PAL_6569_TIMING) {
     this.io = new C64Io({
       read: (address) => this.readVicMemory(address),
       readColor: (index) => this.readVicColor(index)
-    });
+    }, timing, () => this.dataBusLatch);
   }
 
   read(address: number): number {
-    return this.readMapped(address, false);
+    const value = this.readMapped(address, false) & 0xff;
+    this.dataBusLatch = value;
+    return value;
   }
 
   peek(address: number): number {
@@ -51,6 +56,7 @@ export class C64Bus implements Bus {
   write(address: number, value: number): void {
     const normalizedAddress = address & 0xffff;
     const byte = value & 0xff;
+    this.dataBusLatch = byte;
 
     if (normalizedAddress === 0x0000) {
       this.dataDirection = byte;
@@ -82,12 +88,15 @@ export class C64Bus implements Bus {
   readVicMemory(address: number): number {
     const vicAddress = address & 0x3fff;
     const bank = this.vicBankNumber;
+    const value = (bank === 0 || bank === 2) && vicAddress >= 0x1000 && vicAddress <= 0x1fff
+      ? this.roms.character[vicAddress - 0x1000] ?? 0xff
+      : this.ram[this.vicBankBase | vicAddress] ?? 0;
 
-    if ((bank === 0 || bank === 2) && vicAddress >= 0x1000 && vicAddress <= 0x1fff) {
-      return this.roms.character[vicAddress - 0x1000] ?? 0xff;
-    }
-
-    return this.ram[this.vicBankBase | vicAddress] ?? 0;
+    // The VIC shares the motherboard's main data bus for DRAM/character-ROM
+    // fetches. Remembering those values materially improves CPU open-bus reads;
+    // sub-cycle phi1/phi2 ordering remains a later compatibility refinement.
+    this.dataBusLatch = value & 0xff;
+    return this.dataBusLatch;
   }
 
   readVicColor(index: number): number {
@@ -97,6 +106,7 @@ export class C64Bus implements Bus {
   resetProcessorPort(): void {
     this.dataDirection = 0x2f;
     this.dataLatch = 0x37;
+    this.dataBusLatch = 0xff;
     this.inputPins = 0x17;
   }
 
@@ -138,6 +148,16 @@ export class C64Bus implements Bus {
 
   get processorPortDataLatch(): number {
     return this.dataLatch;
+  }
+
+  /** Last value driven on the shared 8-bit system data bus. */
+  get systemDataBusValue(): number {
+    return this.dataBusLatch;
+  }
+
+  /** Backward-compatible diagnostic alias retained for existing callers. */
+  get cpuDataBusValue(): number {
+    return this.systemDataBusValue;
   }
 
   get processorPortPins(): number {

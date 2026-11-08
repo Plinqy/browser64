@@ -2,6 +2,7 @@ import { Cia6526 } from '../cia/Cia6526';
 import { KeyboardMatrix } from '../cia/KeyboardMatrix';
 import { Sid } from '../sid/Sid';
 import { VicII, type VicMemory } from '../vic/VicII';
+import { PAL_6569_TIMING, type VicTimingProfile } from '../vic/VicTiming';
 import { ColorRam } from './ColorRam';
 import type { MemoryMappedDevice } from './Device';
 import { OpenBusDevice } from './OpenBusDevice';
@@ -20,26 +21,33 @@ const JOYSTICK_MASK: Readonly<Record<JoystickControl, number>> = Object.freeze({
 /**
  * Routes CPU accesses inside the C64's $D000-$DFFF I/O window.
  *
- * v0.8 combines the timed VIC-II/CIAs with a cycle-clocked 6581/8580 SID.
- * SID register mirrors therefore reach the real synthesizer instead of a
- * passive register file.
+ * v0.9 keeps the timed VIC-II/CIAs/SID on a machine timing profile and lets
+ * undriven expansion I/O plus the high nibble of color RAM observe the CPU
+ * data-bus latch supplied by C64Bus.
  */
 export class C64Io implements MemoryMappedDevice {
   public readonly vic: VicII;
   public readonly sid: Sid;
-  public readonly colorRam = new ColorRam();
+  public readonly colorRam: ColorRam;
   public readonly cia1 = new Cia6526();
   public readonly cia2 = new Cia6526();
   public readonly keyboard = new KeyboardMatrix();
-  public readonly io1 = new OpenBusDevice();
-  public readonly io2 = new OpenBusDevice();
+  public readonly io1: OpenBusDevice;
+  public readonly io2: OpenBusDevice;
 
   private joystick1Pins = 0xff;
   private joystick2Pins = 0xff;
 
-  constructor(vicMemory?: VicMemory) {
-    this.vic = new VicII(vicMemory);
-    this.sid = new Sid('6581', this.vic.timing.systemClockHz);
+  constructor(
+    vicMemory?: VicMemory,
+    timing: VicTimingProfile = PAL_6569_TIMING,
+    openBusValue: () => number = () => 0xff
+  ) {
+    this.vic = new VicII(vicMemory, timing);
+    this.sid = new Sid('6581', timing.systemClockHz);
+    this.colorRam = new ColorRam(openBusValue);
+    this.io1 = new OpenBusDevice(openBusValue);
+    this.io2 = new OpenBusDevice(openBusValue);
 
     // CIA1 Port A normally drives keyboard columns and shares pins with
     // joystick 2. Port B normally reads rows and shares pins with joystick 1.

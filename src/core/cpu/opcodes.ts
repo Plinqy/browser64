@@ -1,4 +1,4 @@
-import type { AddressingMode, Mnemonic, OpcodeInfo } from './types';
+import type { AddressingMode, Mnemonic, OpcodeInfo, OpcodeStability } from './types';
 
 const table: Array<OpcodeInfo | undefined> = new Array<OpcodeInfo | undefined>(256);
 
@@ -8,9 +8,35 @@ function op(
   mode: AddressingMode,
   bytes: number,
   cycles: number,
+  pageCrossCycle = false,
+  stability: OpcodeStability = 'official'
+): void {
+  table[opcode] = { opcode, mnemonic, mode, bytes, cycles, pageCrossCycle, stability };
+}
+
+function uop(
+  opcode: number,
+  mnemonic: Mnemonic,
+  mode: AddressingMode,
+  bytes: number,
+  cycles: number,
   pageCrossCycle = false
 ): void {
-  table[opcode] = { opcode, mnemonic, mode, bytes, cycles, pageCrossCycle };
+  op(opcode, mnemonic, mode, bytes, cycles, pageCrossCycle, 'stable-undocumented');
+}
+
+function jam(opcode: number): void {
+  op(opcode, 'JAM', 'IMP', 1, 2, false, 'jam');
+}
+
+function unstable(
+  opcode: number,
+  mnemonic: Mnemonic,
+  mode: AddressingMode,
+  bytes: number,
+  cycles: number
+): void {
+  op(opcode, mnemonic, mode, bytes, cycles, false, 'unstable-undocumented');
 }
 
 // 0x00
@@ -196,9 +222,85 @@ op(0xf9, 'SBC', 'ABSY', 3, 4, true);
 op(0xfd, 'SBC', 'ABSX', 3, 4, true);
 op(0xfe, 'INC', 'ABSX', 3, 7);
 
+// Stable NMOS 6502/6510 undocumented instructions. These opcodes are real
+// decode-matrix combinations used by C64 software and demos. The unstable
+// bus-conflict family is decoded below for disassembly but deliberately not
+// executed without a chip/bus-specific model.
+
+// SLO = ASL memory, then ORA.
+uop(0x03, 'SLO', 'INDX', 2, 8); uop(0x07, 'SLO', 'ZP', 2, 5);
+uop(0x0f, 'SLO', 'ABS', 3, 6); uop(0x13, 'SLO', 'INDY', 2, 8);
+uop(0x17, 'SLO', 'ZPX', 2, 6); uop(0x1b, 'SLO', 'ABSY', 3, 7);
+uop(0x1f, 'SLO', 'ABSX', 3, 7);
+
+// RLA = ROL memory, then AND.
+uop(0x23, 'RLA', 'INDX', 2, 8); uop(0x27, 'RLA', 'ZP', 2, 5);
+uop(0x2f, 'RLA', 'ABS', 3, 6); uop(0x33, 'RLA', 'INDY', 2, 8);
+uop(0x37, 'RLA', 'ZPX', 2, 6); uop(0x3b, 'RLA', 'ABSY', 3, 7);
+uop(0x3f, 'RLA', 'ABSX', 3, 7);
+
+// SRE = LSR memory, then EOR.
+uop(0x43, 'SRE', 'INDX', 2, 8); uop(0x47, 'SRE', 'ZP', 2, 5);
+uop(0x4f, 'SRE', 'ABS', 3, 6); uop(0x53, 'SRE', 'INDY', 2, 8);
+uop(0x57, 'SRE', 'ZPX', 2, 6); uop(0x5b, 'SRE', 'ABSY', 3, 7);
+uop(0x5f, 'SRE', 'ABSX', 3, 7);
+
+// RRA = ROR memory, then ADC.
+uop(0x63, 'RRA', 'INDX', 2, 8); uop(0x67, 'RRA', 'ZP', 2, 5);
+uop(0x6f, 'RRA', 'ABS', 3, 6); uop(0x73, 'RRA', 'INDY', 2, 8);
+uop(0x77, 'RRA', 'ZPX', 2, 6); uop(0x7b, 'RRA', 'ABSY', 3, 7);
+uop(0x7f, 'RRA', 'ABSX', 3, 7);
+
+// SAX and LAX.
+uop(0x83, 'SAX', 'INDX', 2, 6); uop(0x87, 'SAX', 'ZP', 2, 3);
+uop(0x8f, 'SAX', 'ABS', 3, 4); uop(0x97, 'SAX', 'ZPY', 2, 4);
+uop(0xa3, 'LAX', 'INDX', 2, 6); uop(0xa7, 'LAX', 'ZP', 2, 3);
+uop(0xaf, 'LAX', 'ABS', 3, 4); uop(0xb3, 'LAX', 'INDY', 2, 5, true);
+uop(0xb7, 'LAX', 'ZPY', 2, 4); uop(0xbf, 'LAX', 'ABSY', 3, 4, true);
+
+// DCP = DEC memory, then CMP; ISC = INC memory, then SBC.
+uop(0xc3, 'DCP', 'INDX', 2, 8); uop(0xc7, 'DCP', 'ZP', 2, 5);
+uop(0xcf, 'DCP', 'ABS', 3, 6); uop(0xd3, 'DCP', 'INDY', 2, 8);
+uop(0xd7, 'DCP', 'ZPX', 2, 6); uop(0xdb, 'DCP', 'ABSY', 3, 7);
+uop(0xdf, 'DCP', 'ABSX', 3, 7);
+uop(0xe3, 'ISC', 'INDX', 2, 8); uop(0xe7, 'ISC', 'ZP', 2, 5);
+uop(0xef, 'ISC', 'ABS', 3, 6); uop(0xf3, 'ISC', 'INDY', 2, 8);
+uop(0xf7, 'ISC', 'ZPX', 2, 6); uop(0xfb, 'ISC', 'ABSY', 3, 7);
+uop(0xff, 'ISC', 'ABSX', 3, 7);
+
+// Immediate combinations and the stable LAS/SBC aliases.
+uop(0x0b, 'ANC', 'IMM', 2, 2); uop(0x2b, 'ANC', 'IMM', 2, 2);
+uop(0x4b, 'ALR', 'IMM', 2, 2); uop(0x6b, 'ARR', 'IMM', 2, 2);
+uop(0xcb, 'AXS', 'IMM', 2, 2); uop(0xbb, 'LAS', 'ABSY', 3, 4, true);
+uop(0xeb, 'SBC', 'IMM', 2, 2);
+
+// Undocumented NOPs perform their real operand/dummy reads.
+for (const opcode of [0x1a, 0x3a, 0x5a, 0x7a, 0xda, 0xfa]) uop(opcode, 'NOP', 'IMP', 1, 2);
+for (const opcode of [0x80, 0x82, 0x89, 0xc2, 0xe2]) uop(opcode, 'NOP', 'IMM', 2, 2);
+for (const opcode of [0x04, 0x44, 0x64]) uop(opcode, 'NOP', 'ZP', 2, 3);
+for (const opcode of [0x14, 0x34, 0x54, 0x74, 0xd4, 0xf4]) uop(opcode, 'NOP', 'ZPX', 2, 4);
+uop(0x0c, 'NOP', 'ABS', 3, 4);
+for (const opcode of [0x1c, 0x3c, 0x5c, 0x7c, 0xdc, 0xfc]) uop(opcode, 'NOP', 'ABSX', 3, 4, true);
+
+// JAM/KIL stops the NMOS core until RESET.
+for (const opcode of [0x02, 0x12, 0x22, 0x32, 0x42, 0x52, 0x62, 0x72, 0x92, 0xb2, 0xd2, 0xf2]) jam(opcode);
+
+// These decode on real NMOS parts but depend on internal/bus conflict details
+// that vary with silicon and page crossing. Decode them for a correct listing,
+// but refuse to fabricate deterministic execution semantics.
+unstable(0x8b, 'XAA', 'IMM', 2, 2);
+unstable(0xab, 'LXA', 'IMM', 2, 2);
+unstable(0x93, 'AHX', 'INDY', 2, 6);
+unstable(0x9f, 'AHX', 'ABSY', 3, 5);
+unstable(0x9b, 'TAS', 'ABSY', 3, 5);
+unstable(0x9c, 'SHY', 'ABSX', 3, 5);
+unstable(0x9e, 'SHX', 'ABSY', 3, 5);
+
 export const OPCODES: ReadonlyArray<OpcodeInfo | undefined> = table;
 
-export const OFFICIAL_OPCODE_COUNT = table.filter((entry) => entry !== undefined).length;
+export const OFFICIAL_OPCODE_COUNT = table.filter((entry) => entry?.stability === 'official').length;
+export const IMPLEMENTED_OPCODE_COUNT = table.filter((entry) => entry !== undefined && entry.stability !== 'unstable-undocumented').length;
+export const UNSTABLE_OPCODE_COUNT = table.filter((entry) => entry?.stability === 'unstable-undocumented').length;
 
 export function getOpcodeInfo(opcode: number): OpcodeInfo | undefined {
   return table[opcode & 0xff];

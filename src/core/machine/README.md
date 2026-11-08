@@ -2,7 +2,7 @@
 
 ## Overview
 
-`C64Machine` is the composition root for a stock Commodore 64. It owns the CPU, bus, VIC-II, SID, both CIA chips, debugger interfaces, interrupt wiring, the master system clock, and the machine-level operations a host needs for ROM startup, joystick state, RESTORE, and PRG loading.
+`C64Machine` is the composition root for a stock Commodore 64 and is constructed with an immutable PAL/NTSC timing profile. It owns the CPU, bus, VIC-II, SID, both CIA chips, debugger interfaces, interrupt wiring, the master system clock, and the machine-level operations a host needs for ROM startup, joystick state, RESTORE, and PRG loading.
 
 The browser is responsible for wall-clock pacing and host-event translation; the machine remains deterministic.
 
@@ -40,6 +40,11 @@ CIA1 and VIC-II share the 6510 IRQ line. CIA2 assertion is edge-converted to NMI
 `tickSystemCycle()` advances a complete C64 system cycle: synchronize interrupt inputs, sample VIC BA/AEC, offer one bus cycle to the 6510, advance VIC/SID/CIAs, increment the master clock, and synchronize newly generated interrupt state.
 
 `step()` remains an instruction-granular wrapper and `runFrame()` advances whole instructions until the VIC enters its next frame.
+
+
+### PAL and NTSC profiles
+
+`new C64Machine()` defaults to the PAL MOS 6569 profile (63 cycles × 312 lines, 985,248 Hz). Passing `NTSC_6567R8_TIMING` selects the later NTSC MOS 6567R8 profile (65 cycles × 263 lines, 1,022,727 Hz). The same profile object is propagated through `C64Bus`/`C64Io` to both VIC-II and SID so video geometry and audio clocking cannot silently disagree. The older 6567R56A revision is not yet modeled.
 
 ### Real-time execution
 

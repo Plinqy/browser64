@@ -104,6 +104,10 @@ export class Sid implements MemoryMappedDevice {
     this.busTtl = Math.min(this.busTtl, SID_MODEL_CHARACTERISTICS[model].databusTtlCycles);
   }
 
+  get clockFrequencyHz(): number {
+    return this.clockFrequency;
+  }
+
   setClockFrequency(clockFrequency: number): void {
     if (!Number.isFinite(clockFrequency) || clockFrequency <= 0) {
       throw new RangeError('SID clock frequency must be positive.');

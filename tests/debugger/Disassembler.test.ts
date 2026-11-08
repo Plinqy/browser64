@@ -21,10 +21,13 @@ describe('Disassembler', () => {
     expect(disassembler.disassemble(0x8007).text).toBe('BNE $8000');
   });
 
-  it('renders unsupported opcodes as data without throwing', () => {
+  it('renders decoded undocumented opcodes, including JAM, without throwing', () => {
     const bus = new RamBus();
-    bus.write(0x8000, 0x02);
-    expect(new Disassembler(bus).disassemble(0x8000).text).toBe('.byte $02');
+    bus.load([0x02, 0x8b, 0x44], 0x8000);
+    const disassembler = new Disassembler(bus);
+
+    expect(disassembler.disassemble(0x8000).text).toBe('JAM');
+    expect(disassembler.disassemble(0x8001).text).toBe('XAA #$44');
   });
 });
 

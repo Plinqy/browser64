@@ -2,16 +2,20 @@
 
 A from-scratch Commodore 64 emulator written in TypeScript for the browser.
 
-Version **0.8.0** adds a cycle-clocked MOS 6581/8580 SID to the usable C64: three voices, ADSR, sync/ring/noise/pulse synthesis, model-specific DAC and bus behavior, shared multimode filtering, and browser AudioWorklet output.
+Version **0.9.0** hardens compatibility: stable NMOS undocumented 6510 opcodes, penultimate-cycle interrupt sampling, JAM/KIL behavior, shared data-bus/open-bus state, tighter VIC raster IRQ timing, and coherent PAL/NTSC machine profiles.
 
 ## Current Capabilities
 
 ### MOS 6510 / NMOS 6502
 
 - all 151 documented NMOS 6502 opcodes
+- stable NMOS undocumented opcode families (SLO/RLA/SRE/RRA/SAX/LAX/DCP/ISC, ANC/ALR/ARR/AXS/LAS, NOP aliases, `$EB` SBC)
+- JAM/KIL halt state released only by reset
+- unstable magic-constant/store-high opcodes decoded but rejected rather than fabricated
 - all documented addressing modes
 - binary and NMOS decimal ADC/SBC
 - stack, BRK, IRQ, NMI, RTI, JSR/RTS
+- IRQ/NMI polling on the penultimate instruction cycle, including CLI/SEI/PLP mask latency
 - documented instruction cycle counts and page-cross penalties
 - NMOS `JMP ($xxFF)` wrap behavior
 - read-modify-write old-value dummy writes
@@ -34,6 +38,8 @@ Version **0.8.0** adds a cycle-clocked MOS 6581/8580 SID to the usable C64: thre
 - VIC character-ROM shadowing in banks 0 and 2
 - browser-supplied 8K BASIC, 8K KERNAL, and 4K character ROMs
 - Power On begins at the real KERNAL `$FFFC/$FFFD` reset vector
+- shared data-bus latch updated by CPU and VIC memory traffic
+- expansion I/O open-bus reads and color-RAM high-nibble bus behavior
 
 ### MOS 6526 CIA and Input
 
@@ -54,8 +60,10 @@ Version **0.8.0** adds a cycle-clocked MOS 6581/8580 SID to the usable C64: thre
 ### VIC-II
 
 - PAL MOS 6569 timing: 63 cycles/line × 312 lines/frame
-- NTSC 6567R8 timing profile metadata
-- raster line/cycle/frame counters and raster IRQ
+- NTSC MOS 6567R8 timing: 65 cycles/line × 263 lines/frame
+- profile-selected system/SID clock (985,248 Hz PAL; 1,022,727 Hz NTSC)
+- raster line/cycle/frame counters and cycle-1 raster IRQ (cycle 2 on line 0)
+- same-line raster-compare write triggering
 - bad-line BA/AEC arbitration
 - c/g display-memory sequencer with VC/VCBASE/RC/VMLI
 - standard text, multicolor text, standard bitmap, multicolor bitmap, ECM text
@@ -111,15 +119,16 @@ Version **0.8.0** adds a cycle-clocked MOS 6581/8580 SID to the usable C64: thre
 - half-cycle-exact sprite p/s DMA fetch ordering
 - exact dot-clock border transitions and border-opening tricks
 - light pen
-- VIC open-bus behavior
+- half-cycle-exact shared-bus/open-bus phase ordering
 - sprite crunch and obscure expansion flip-flop tricks
-- deeper NTSC VIC timing refinement
+- older 6567R56A NTSC profile and deeper per-revision VIC timing
 - full transistor/op-amp-level 6581 filter calibration and per-chip variation
 - exact SID POT RC conversion timing and analog noise/distortion floor
 - IEC bus and 1541
 - T64/D64 loading
 - cartridges/GAME/EXROM
-- undocumented NMOS opcodes
+- chip-specific modeling for unstable XAA/LXA/AHX/TAS/SHX/SHY opcodes
+- BRK/IRQ vector hijacking and the remaining interrupt race edge cases
 - reset-pin micro-sequencing
 
 ## Requirements
@@ -170,7 +179,7 @@ The Klaus Dormann functional test remains optional. If you possess the 64 KiB `6
 tests/assets/6502_functional_test.bin
 ```
 
-## v0.8 Architecture
+## v0.9 Architecture
 
 ```text
 Browser adapters
@@ -230,18 +239,16 @@ The host-only input adapter is separately documented in `src/input/README.md`.
 
 ## Roadmap
 
-### v0.9 — CPU/VIC/SID compatibility hardening
+### v0.10 — D64 and IEC foundation
 
-- external SID test-program corpus
-- combined-waveform empirical refinement
-- undocumented 6510 opcodes and interrupt edge cases
-- deeper VIC raster/border/open-bus behavior
-- SID analog/filter calibration improvements
+- D64 parsing and directory/file access
+- explicit IEC serial-bus lines and device abstraction
+- high-level accelerated LOAD path kept separate from hardware emulation
+- groundwork for a later cycle-synchronized 1541 computer
 
 ### Later
 
-- CPU/VIC edge-case accuracy and VICE tests
-- D64 and IEC abstraction
+- deeper CPU/VIC half-cycle edge-case accuracy and VICE tests
 - full 1541 emulation
 - cartridges and tape
 - advanced debugger tooling

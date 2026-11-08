@@ -4,14 +4,14 @@
 
 This directory implements the NMOS 6502 execution engine used by the C64's MOS 6510. The 6510-specific `$0000/$0001` processor port remains in the C64 bus layer, while the CPU core owns registers, flags, addressing, interrupts, decimal arithmetic, stack behavior, and instruction timing.
 
-Version 0.5 changes the timing model substantially: the CPU can now advance **one bus cycle at a time**. `step()` is retained as a compatibility wrapper that repeatedly clocks the cycle engine until one instruction or hardware-interrupt sequence finishes.
+The timing model is cycle-steppable: the CPU can now advance **one bus cycle at a time**. `step()` is retained as a compatibility wrapper that repeatedly clocks the cycle engine until one instruction or hardware-interrupt sequence finishes.
 
 Files:
 
 - `Cpu6510.ts` — cycle engine, instruction micro-operations, registers, interrupts, ALU, stack, and RDY/AEC behavior.
 - `Flags.ts` — processor-status bit definitions.
 - `types.ts` — opcode/addressing/register types.
-- `opcodes.ts` — metadata for all 151 documented NMOS 6502 opcodes.
+- `opcodes.ts` — metadata for all 256 NMOS decode values, classified as official, stable undocumented, unstable undocumented, or JAM.
 
 ## Architecture
 
@@ -66,7 +66,7 @@ Branches schedule the taken-branch dummy cycle and the additional page-cross cyc
 
 ### Stack and interrupts
 
-Stack pushes and pulls occur on explicit bus cycles. BRK, IRQ/NMI, JSR, RTS, and RTI are separately scheduled rather than being collapsed into an atomic helper. IRQ remains level-sensitive and NMI remains edge-latched at instruction boundaries.
+Stack pushes and pulls occur on explicit bus cycles. BRK, IRQ/NMI, JSR, RTS, and RTI are separately scheduled rather than being collapsed into an atomic helper. v0.9 polls IRQ/NMI at the end of the instruction's penultimate cycle. That reproduces the NMOS one-instruction interrupt-mask latency around CLI/SEI/PLP and lets dynamic branch/page-cross cycles replace an earlier provisional poll. IRQ remains level-sensitive; NMI remains edge-latched. Full BRK/IRQ vector-hijack races remain deferred.
 
 The reset vector is still initialized atomically by `reset()` and charged as seven CPU cycles. The machine advances the peripherals through those seven reset cycles without executing normal CPU micro-operations. A later deep-timing phase can model reset pin sequencing if compatibility requires it.
 
@@ -76,7 +76,9 @@ ADC and SBC retain the verified NMOS decimal behavior from earlier releases. In 
 
 ### Undocumented opcodes
 
-Undocumented NMOS opcodes remain intentionally unsupported. They throw `UnsupportedOpcodeError` rather than silently behaving as NOPs. They will be added as an explicit compatibility phase with dedicated timing tests.
+v0.9 implements the stable NMOS combinations used by real C64 software: SLO/RLA/SRE/RRA, SAX/LAX, DCP/ISC, ANC/ALR/ARR/AXS, LAS, the `$EB` SBC alias, and all multi-byte NOP forms. Read-modify-write combinations retain the NMOS old-value dummy write and their 5–8 cycle addressing sequences. JAM/KIL enters a stopped state that only `reset()` releases.
+
+The temperature/silicon/bus-sensitive XAA, LXA, AHX, TAS, SHX, and SHY family is still decoded for disassembly but throws `UnstableOpcodeError` instead of inventing a magic constant or page-cross result. That is an intentional accuracy boundary, not a missing decoder entry.
 
 ### Host/debugger launch point
 

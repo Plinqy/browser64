@@ -1,90 +1,80 @@
-# v0.8 Verification
+# v0.9 Verification
 
-Version 0.8 adds the MOS 6581/8580 SID core and the browser AudioWorklet output path while keeping Web Audio outside the deterministic emulator core.
+Version 0.9 is a compatibility-hardening release. It extends the already cycle-stepped v0.8 machine with stable NMOS 6510 undocumented instructions, more faithful interrupt polling, shared motherboard data-bus/open-bus behavior, tighter VIC-II raster interrupt timing, and coherent PAL/NTSC machine profiles.
 
-## Research and implementation boundary
+## CPU compatibility and timing
 
-The SID implementation was cross-checked against the MOS SID register model, historic hardware measurements, modern reSID/reSIDfp behavioral documentation/source, VICE/libresidfp regression tests, die-informed DAC/filter findings, and current Web Audio/AudioWorklet documentation.
+The opcode table classifies all 256 byte values. The v0.9 core contains:
 
-No reSID/reSIDfp source code, measured combined-waveform tables, or other GPL lookup data are copied into this project. The implementation is original. In particular:
+- all 151 documented NMOS 6502 opcodes;
+- stable undocumented opcode families `SLO`, `RLA`, `SRE`, `RRA`, `SAX`, `LAX`, `DCP`, `ISC`, `ANC`, `ALR`, `ARR`, `AXS`, `LAS`, undocumented NOP forms, and the `$EB` SBC alias;
+- all twelve JAM/KIL encodings, which halt the CPU until RESET;
+- explicit classification of the unstable `XAA`, `LXA`, `AHX`, `TAS`, `SHY`, and `SHX` forms. These throw `UnstableOpcodeError` instead of inventing a chip-independent magic constant or bus result.
 
-- 6581 envelope/waveform DAC tables are generated from an independently solved R-2R ladder (`2R/R ~= 2.2`, missing LSB termination).
-- 8580 DACs use the ideal terminated `2R/R ~= 2.0` model.
-- combined waveforms use an original algorithmic coupling approximation rather than third-party measured tables.
-- the 6581 filter uses a representative nonlinear cutoff curve and simplified state-variable analog model; it is not claimed to reproduce every physical 6581 revision.
+IRQ/NMI recognition is sampled at the end of the instruction's penultimate effective cycle. Dynamic branch/page-cross extensions therefore move the poll to the later penultimate cycle. This reproduces the characteristic CLI/SEI/PLP interrupt-mask latency while preserving immediate RTI mask restoration.
 
-The project documentation explicitly identifies those analog limits rather than presenting them as sample-exact behavior.
+The remaining interrupt-race limitations are documented: BRK/IRQ vector hijacking by a late NMI and reset-pin micro-sequencing are not yet claimed cycle exact.
 
-## Digital SID behavior covered
+## VIC-II timing and machine profiles
 
-The v0.8 core implements and tests:
+The PAL profile remains MOS 6569 at 63 cycles × 312 lines and 985,248 system cycles/second.
 
-- three independent voices and the real 24-bit phase-accumulator frequency path
-- triangle, saw, pulse, and 23-bit LFSR noise
-- pulse comparator pipeline
-- bit-19 noise clock pipeline
-- oscillator synchronization and chained-sync exception
-- triangle ring modulation
-- TEST phase hold and modeled slow noise-register reset behavior
-- combined waveform interaction and destructive noise write-back approximation
-- cycle-clocked 15-bit ADSR rate LFSR and exponential divider
-- ADSR delay behavior
-- `$FF->$00` and `$00->$FF` envelope boundary behaviors
-- patterned SID power-up state and reset preservation of oscillator phase/envelope counter state
-- 6581 non-monotonic DAC transfer behavior
-- 8580 near-ideal DAC transfer behavior
-- per-source filter routing, LP/BP/HP modes, resonance, V3OFF, EXT IN, and master volume
-- 8580 exponential resonance ladder law
-- representative nonlinear 6581 cutoff/resonance behavior
-- C64 output RC path (approximately 16 kHz LP and 1.6 Hz high-pass/DC block)
-- POTX/POTY, OSC3, and ENV3 reads
-- write-only-register floating bus reads with model-specific decay windows
-- one-cycle 8580 write pipeline
-- PAL/NTSC clock plumbing
-- deterministic PCM generation independent of the browser audio clock
+v0.9 adds the MOS 6567R8 NTSC profile at 65 cycles × 263 lines and 1,022,727 system cycles/second. The selected profile is propagated through `C64Machine` to both VIC-II timing and the SID clock so video and sound cannot silently run from different standards.
+
+Raster compare assertion now occurs on the boundary entering cycle 1 of a raster line, with the line-zero exception occurring on the boundary entering cycle 2. Writes to `$D011/$D012` that create a compare match after that line's compare point also latch the raster interrupt. Full instruction/RMW race parity remains future compatibility work.
+
+PAL and 6567R8 NTSC sprite pointer/DMA slots use separate measured schedules instead of applying a one-cycle NTSC approximation.
+
+## Shared data bus / open bus
+
+`C64Bus` keeps the last byte driven on the motherboard data bus. CPU reads/writes and VIC DRAM/character-ROM fetches update that latch. Expansion I/O open-bus reads therefore return the current latch value, and color RAM combines its stored low nibble with the current bus high nibble.
+
+Debugger `peek()` remains side-effect free and does not drive the latch.
+
+This model is intentionally system-cycle granular. Exact phi1/phi2 charge retention and the precise ordering of a VIC fetch versus a CPU open-bus access in the same system cycle remain a documented half-cycle refinement.
+
+## v0.8 SID baseline retained
+
+The v0.8 SID implementation remains intact: cycle-clocked 6581/8580 voices, 15-bit ADSR rate LFSR, noise and synchronization behavior, model-specific DAC/data-bus/write timing, filter routing, deterministic PCM generation, and browser AudioWorklet output. v0.9 only adds the public SID clock-frequency diagnostic used to verify machine-profile propagation.
 
 ## Static verification
 
-The complete source and test tree was type-checked in strict mode using the locally available TypeScript compiler plus verification-only ambient declarations for Vitest/Vite/Node packages and the Vite `?url` asset import. Those declarations are not part of the project or patch.
+The complete source and test tree is type-checked in strict mode using the locally available TypeScript compiler plus verification-only ambient declarations for Vitest/Vite/Node packages and the Vite `?url` asset import. Those declarations are never added to the project or patch.
 
 Result: **PASS**
 
-The browser source is included in this type-check, including the SID model selector, AudioWorklet bridge, PCM transfer, mute/resume controls, and existing ROM/input/PRG runtime.
+## CPU differential verification
 
-The AudioWorklet source was also syntax-checked independently with Node's JavaScript parser.
-
-Result: **PASS**
-
-## Compiled regression
-
-All normal unit tests were compiled to a temporary CommonJS tree and executed through the verification-only Vitest-compatible assertion harness.
-
-Result before patch packaging:
+The documented opcode executor is compared against the exact v0.8 CPU for every documented opcode across eight deterministic register/memory states:
 
 ```text
-147 passed
+151 documented opcodes × 8 states = 1,208 comparisons
+```
+
+Each comparison checks cycle count, A/X/Y/SP/PC/status, total CPU cycles, and the complete 64 KiB RAM image. This guards the compatibility work against unintended regressions in the documented instruction set.
+
+Result: **1,208 / 1,208 PASS**
+
+`ARR`, the most irregular stable undocumented immediate operation, is additionally checked exhaustively across every accumulator byte, operand byte, carry input, and decimal-mode state against an independent NMOS reference formula.
+
+Result: **262,144 / 262,144 PASS**
+
+## Normal regression suite
+
+The normal regression suite covers the existing CPU, memory, CIA, VIC-II, sprite, SID, ROM, input, PRG, debugger, and machine behavior plus the new v0.9 compatibility cases. The optional Klaus Dormann test remains separate because `tests/assets/6502_functional_test.bin` is not redistributed with the project.
+
+Pre-packaging result:
+
+```text
+166 passed
 0 failed
 ```
 
-The optional Klaus Dormann CPU test is intentionally excluded from this count because `tests/assets/6502_functional_test.bin` is not redistributed with the project. The v0.8 CPU implementation itself is unchanged.
-
-SID-specific coverage includes oscillator phase, hard sync, ring modulation, LFSR timing/published selector vectors, model-specific OSC3 timing, SID reset state, ADSR timing/LFSR phase/delay/boundary behavior, DAC discontinuities, filter routing/cutoff, bus decay, model-specific write timing, readable registers, deterministic PCM output, and machine-level one-SID-clock-per-master-cycle integration.
-
-## Performance sanity check
-
-A standalone SID stress run with all three voices, envelopes, filter routing, and analog-output calculations completed 1,000,000 SID cycles in approximately 282 ms in this container (about 3.55 million SID cycles/second).
-
-This is a performance sanity check, not a browser benchmark, but it provides sufficient headroom over the PAL C64 SID clock (~985 kHz) to keep the TypeScript implementation for this phase rather than prematurely moving the core to WebAssembly.
-
-## Browser audio boundary
-
-`Sid` remains entirely browser-independent. When audio is enabled it deterministically decimates emulated cycle-rate output into PCM. `SidAudio` transfers those samples to an `AudioWorkletProcessor`, which only acts as the browser playback sink. Web Audio does not advance or reschedule emulated SID state.
-
-Actual browser audio device behavior cannot be exercised headlessly in this container, so the user's local browser remains the final integration check for AudioContext autoplay policy, worklet loading, real device sample rate, and audible output.
+The generated patch is also applied to a fresh v0.8 tree and the resulting tree is retested; that final artifact result is recorded in `V0.9-PATCH-VERIFICATION.txt`.
 
 ## Package-manager limitation
 
-This execution environment does not have this project's real npm dependency tree installed and cannot reliably reach the npm registry. Therefore `npm run build` and the real Vitest executable cannot be run here.
+This execution environment cannot reliably reach the npm registry, so the real installed Vite/Vitest dependency tree is not available here. The project is therefore verified with strict TypeScript and an independent compiled test runner, then the generated patch is applied and retested from a fresh tree.
 
 After applying the patch locally, run:
 
@@ -92,5 +82,3 @@ After applying the patch locally, run:
 npm run build
 npm run test
 ```
-
-Expected normal Vitest count without the optional Klaus binary: **147 passing, 1 skipped**.

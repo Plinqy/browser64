@@ -59,6 +59,7 @@ const SPRITE_COUNT = 8;
 const SPRITE_POINTER_OFFSET = 0x03f8;
 
 const PAL_SPRITE_POINTER_CYCLES = [58, 60, 62, 1, 3, 5, 7, 9] as const;
+const NTSC_R8_SPRITE_POINTER_CYCLES = [59, 61, 63, 65, 2, 4, 6, 8] as const;
 
 /**
  * MOS VIC-II video/memory sequencer.
@@ -137,13 +138,19 @@ export class VicII implements MemoryMappedDevice {
     const byte = value & 0xff;
 
     switch (register) {
-      case 0x11:
+      case 0x11: {
+        const previousCompare = this.rasterCompareValue;
         this.registers[register] = byte & 0x7f;
         this.rasterCompareValue = (this.rasterCompareValue & 0x00ff) | ((byte & 0x80) << 1);
+        this.maybeLatchRasterInterruptOnCompareWrite(previousCompare);
         break;
-      case 0x12:
+      }
+      case 0x12: {
+        const previousCompare = this.rasterCompareValue;
         this.rasterCompareValue = (this.rasterCompareValue & 0x0100) | byte;
+        this.maybeLatchRasterInterruptOnCompareWrite(previousCompare);
         break;
+      }
       case 0x18:
         this.registers[register] = byte & 0xfe;
         break;
@@ -445,6 +452,11 @@ export class VicII implements MemoryMappedDevice {
     this.cycleInLineValue += 1;
 
     if (this.cycleInLineValue < this.timing.cyclesPerLine) {
+      // Raster line 0 is the exception: its counter/compare event occurs at
+      // the boundary entering cycle 2 rather than the boundary entering 1.
+      if (this.rasterLineValue === 0 && this.rasterCycle === 2) {
+        this.latchRasterInterruptIfMatched();
+      }
       return;
     }
 
@@ -465,8 +477,11 @@ export class VicII implements MemoryMappedDevice {
       this.displayStateValue = false;
       this.framebuffer.fill(this.borderColor);
       this.graphicsOpaque.fill(0);
+      return;
     }
 
+    // Reaching a non-zero line places the VIC at the start of cycle 1, where
+    // the raster counter is compared before the CPU's bus phase begins.
     this.latchRasterInterruptIfMatched();
   }
 
@@ -816,6 +831,16 @@ export class VicII implements MemoryMappedDevice {
     this.framebuffer[frameIndex] = color & 0x0f;
   }
 
+  private maybeLatchRasterInterruptOnCompareWrite(previousCompare: number): void {
+    if (previousCompare === this.rasterCompareValue) return;
+    if (this.rasterCompareValue !== this.rasterLineValue) return;
+
+    const compareCycle = this.rasterLineValue === 0 ? 2 : 1;
+    if (this.rasterCycle >= compareCycle) {
+      this.interruptStatus |= IRQ_RASTER;
+    }
+  }
+
   private latchRasterInterruptIfMatched(): void {
     if (this.rasterLineValue === this.rasterCompareValue) {
       this.interruptStatus |= IRQ_RASTER;
@@ -854,14 +879,10 @@ export class VicII implements MemoryMappedDevice {
   }
 
   private spritePointerCycle(sprite: number): number {
-    if (this.timing.standard === 'pal') {
-      return PAL_SPRITE_POINTER_CYCLES[sprite] ?? 1;
-    }
-
-    // v0.6 keeps the PAL model authoritative. NTSC uses the same sprite engine
-    // but delays the PAL end-of-line slots by one cycle where practical.
-    const palCycle = PAL_SPRITE_POINTER_CYCLES[sprite] ?? 1;
-    return palCycle >= 58 ? palCycle + 1 : palCycle;
+    const slots = this.timing.standard === 'pal'
+      ? PAL_SPRITE_POINTER_CYCLES
+      : NTSC_R8_SPRITE_POINTER_CYCLES;
+    return slots[sprite] ?? 1;
   }
 
   private cycleInWrappedRange(cycle: number, rawStart: number, rawEnd: number): boolean {

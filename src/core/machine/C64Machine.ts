@@ -5,6 +5,7 @@ import type { JoystickControl, JoystickPort } from '../io/C64Io';
 import { C64Bus } from '../memory/C64Bus';
 import { parsePrg, type PrgLoadResult } from '../program/Prg';
 import type { C64RomKind } from '../rom/RomSet';
+import { PAL_6569_TIMING, type VicTimingProfile } from '../vic/VicTiming';
 
 export interface C64SystemCycleResult {
   cpu: CpuClockResult;
@@ -21,18 +22,26 @@ export interface C64SystemCycleResult {
  *
  * The system cycle is the actual execution boundary. Each master tick
  * samples VIC-II BA/AEC, advances one 6510 micro-cycle when permitted, advances
- * VIC/CIA time once, and then resynchronizes interrupt lines.
+ * VIC/CIA/SID time once, and then resynchronizes interrupt lines. v0.9 makes
+ * the PAL/NTSC timing profile an immutable machine-level construction choice.
  */
 export class C64Machine {
-  public readonly bus = new C64Bus();
-  public readonly cpu = new Cpu6510(this.bus);
-  public readonly disassembler = new Disassembler(this.bus);
-  public readonly trace = new TraceFormatter(this.cpu);
+  public readonly bus: C64Bus;
+  public readonly cpu: Cpu6510;
+  public readonly disassembler: Disassembler;
+  public readonly trace: TraceFormatter;
 
   private cia2IrqWasAsserted = false;
   private restorePressed = false;
   private masterCycleCounter = 0;
   private cpuStallCounter = 0;
+
+  constructor(public readonly timing: VicTimingProfile = PAL_6569_TIMING) {
+    this.bus = new C64Bus(timing);
+    this.cpu = new Cpu6510(this.bus);
+    this.disassembler = new Disassembler(this.bus);
+    this.trace = new TraceFormatter(this.cpu);
+  }
 
   loadRom(kind: C64RomKind, bytes: ArrayLike<number>): void {
     this.bus.roms.load(kind, bytes);

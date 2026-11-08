@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { C64Bus } from '../../src/core/memory/C64Bus';
 import { CHARACTER_ROM_SIZE } from '../../src/core/rom/RomSet';
 import { VIC_ACTIVE_X, VIC_ACTIVE_Y, VIC_FRAMEBUFFER_WIDTH } from '../../src/core/vic/VicII';
+import { NTSC_6567R8_TIMING } from '../../src/core/vic/VicTiming';
 
 function spriteBus(): C64Bus {
   const bus = new C64Bus();
@@ -139,4 +140,23 @@ describe('VicII hardware sprites', () => {
     expect(bus.io.vic.baHigh).toBe(false);
     expect(bus.io.vic.aecHigh).toBe(false);
   });
+
+  it('uses the measured 6567R8 sprite-0 DMA slot at cycle 59', () => {
+    const bus = new C64Bus(NTSC_6567R8_TIMING);
+    bus.io.vic.write(0x11, 0x1b);
+    bus.io.vic.write(0x15, 0x01);
+    bus.io.vic.write(0x00, 24);
+    bus.io.vic.write(0x01, 51); // activates on raster 52
+
+    bus.io.vic.tick(52 * 65 + 55); // raster 52, cycle 56: BA lead-in starts
+    expect(bus.io.vic.rasterCycle).toBe(56);
+    expect(bus.io.vic.baHigh).toBe(false);
+    expect(bus.io.vic.aecHigh).toBe(true);
+
+    bus.io.vic.tick(3); // cycle 59: pointer/data DMA owns the bus
+    expect(bus.io.vic.rasterCycle).toBe(59);
+    expect(bus.io.vic.baHigh).toBe(false);
+    expect(bus.io.vic.aecHigh).toBe(false);
+  });
+
 });

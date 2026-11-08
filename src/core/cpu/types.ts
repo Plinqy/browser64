@@ -14,7 +14,11 @@ export type Mnemonic =
   | 'ROL' | 'ROR' | 'RTI' | 'RTS'
   | 'SBC' | 'SEC' | 'SED' | 'SEI'
   | 'STA' | 'STX' | 'STY'
-  | 'TAX' | 'TAY' | 'TSX' | 'TXA' | 'TXS' | 'TYA';
+  | 'TAX' | 'TAY' | 'TSX' | 'TXA' | 'TXS' | 'TYA'
+  | 'ALR' | 'ANC' | 'ARR' | 'AXS'
+  | 'DCP' | 'ISC' | 'JAM' | 'LAS' | 'LAX'
+  | 'RLA' | 'RRA' | 'SAX' | 'SLO' | 'SRE'
+  | 'AHX' | 'LXA' | 'SHX' | 'SHY' | 'TAS' | 'XAA';
 
 export type AddressingMode =
   | 'IMP'
@@ -31,6 +35,8 @@ export type AddressingMode =
   | 'INDY'
   | 'REL';
 
+export type OpcodeStability = 'official' | 'stable-undocumented' | 'unstable-undocumented' | 'jam';
+
 export interface OpcodeInfo {
   opcode: number;
   mnemonic: Mnemonic;
@@ -38,6 +44,7 @@ export interface OpcodeInfo {
   bytes: number;
   cycles: number;
   pageCrossCycle: boolean;
+  stability: OpcodeStability;
 }
 
 export interface CpuRegisters {

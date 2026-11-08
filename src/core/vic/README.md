@@ -6,7 +6,7 @@ This directory contains the MOS VIC-II video core. It owns raster timing, CPU-vi
 
 Version 0.6 moves pixels onto the timed memory pipeline rather than rendering from a frame-time RAM snapshot. Bad-line c-accesses load the internal video/color matrix, per-line g-accesses consume those latches through VC/VCBASE/RC, and the resulting data drives the framebuffer. The same phase adds all five documented display modes and the eight-sprite visual/collision engine.
 
-The default machine profile remains PAL MOS 6569: 63 system cycles per raster line and 312 lines per frame. NTSC timing metadata remains available for later compatibility refinement.
+The default profile is PAL MOS 6569: 63 system cycles per raster line and 312 lines per frame. v0.9 also wires the later NTSC MOS 6567R8 profile end-to-end: 65 cycles per line, 263 lines per frame, the NTSC system clock, and the measured NTSC sprite-pointer/DMA slots.
 
 ## Architecture
 
@@ -53,6 +53,7 @@ The core implements the VIC-II register block through `$D02E`, including:
 - `$D016` CSEL, XSCROLL, and MCM.
 - `$D018` screen/character/bitmap pointer selection.
 - `$D019` interrupt latch with write-one-to-clear acknowledgement.
+- raster compare assertion at the boundary entering cycle 1 of nonzero lines and cycle 2 of line 0; changing `$D011/$D012` to the current line after that point can latch the source immediately.
 - `$D01A` interrupt enable mask.
 - `$D01E/$D01F` read-to-clear sprite collision latches.
 - `$D020-$D024` border/background colors.
@@ -115,7 +116,7 @@ Bad-line arbitration remains:
 - BA low on cycles 12-54,
 - AEC low on cycles 15-54.
 
-Active sprite raster lines add sprite DMA BA/AEC request windows around the PAL sprite fetch slots. `C64Machine` samples the combined signals every system cycle, so sprite DMA can stall the cycle-steppable 6510 in addition to bad-line DMA.
+Active sprite raster lines add sprite DMA BA/AEC request windows around the profile-specific sprite fetch slots. PAL uses 58/60/62/1/3/5/7/9; 6567R8 NTSC uses 59/61/63/65/2/4/6/8. `C64Machine` samples the combined signals every system cycle, so sprite DMA can stall the cycle-steppable 6510 in addition to bad-line DMA.
 
 ### Remaining VIC work
 
@@ -124,7 +125,6 @@ Not yet claimed as cycle-exact:
 - half-cycle p/s sprite fetch ordering,
 - exact dot-clock border transitions and border-opening tricks,
 - light pen,
-- open-bus behavior,
 - sprite crunch/expansion flip-flop edge cases,
-- NTSC-specific sprite fetch windows,
-- all undocumented VIC-II quirks and test-suite compatibility cases.
+- older-NTSC (6567R56A) timing and other revision-specific quirks,
+- full read-modify-write raster-IRQ race behavior and other undocumented VIC-II quirks/test-suite compatibility cases.

@@ -17,7 +17,7 @@ export const PAL_6569_TIMING: VicTimingProfile = Object.freeze({
   systemClockHz: 985_248
 });
 
-/** Later MOS 6567 NTSC timing, exposed now so the scheduler is not PAL-hardcoded. */
+/** Later MOS 6567R8 NTSC-M timing used by the v0.9 machine profile. */
 export const NTSC_6567R8_TIMING: VicTimingProfile = Object.freeze({
   standard: 'ntsc',
   chip: 'MOS 6567R8',

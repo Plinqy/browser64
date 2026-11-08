@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { C64Bus } from '../../src/core/memory/C64Bus';
 import { CHARACTER_ROM_SIZE } from '../../src/core/rom/RomSet';
+import { NTSC_6567R8_TIMING } from '../../src/core/vic/VicTiming';
 import {
   VIC_ACTIVE_X,
   VIC_ACTIVE_Y,
@@ -41,12 +42,44 @@ describe('VicII raster timing and interrupts', () => {
     vic.tick(63);
 
     expect(vic.rasterLine).toBe(1);
-    expect(vic.irqAsserted).toBe(true);
+    expect(vic.rasterCycle).toBe(1);
+    expect(vic.irqAsserted).toBe(true); // asserted at the boundary entering cycle 1
     expect(vic.read(0x19)).toBe(0xf1);
 
     vic.write(0x19, 0x01);
     expect(vic.irqAsserted).toBe(false);
     expect(vic.read(0x19)).toBe(0x70);
+  });
+
+  it('delays the line-zero raster compare event until cycle 2', () => {
+    const vic = new VicII();
+    vic.write(0x11, 0x00);
+    vic.write(0x12, 0x00);
+    vic.write(0x1a, 0x01);
+
+    vic.tick(1);
+    expect(vic.rasterCycle).toBe(2);
+    expect(vic.irqAsserted).toBe(true); // line 0 compares at the boundary entering cycle 2
+  });
+
+  it('latches a raster IRQ when a compare write targets the current line after its compare point', () => {
+    const vic = new VicII();
+    vic.write(0x12, 0x20);
+    vic.write(0x1a, 0x01);
+    vic.tick(1); // line 0, now at cycle 2; the original compare did not match.
+    vic.write(0x12, 0x00);
+
+    expect(vic.irqAsserted).toBe(true);
+    expect(vic.read(0x19)).toBe(0xf1);
+  });
+
+  it('uses 65 cycles and 263 lines for the NTSC 6567R8 profile', () => {
+    const vic = new VicII(undefined, NTSC_6567R8_TIMING);
+
+    expect(vic.cyclesPerFrame).toBe(65 * 263);
+    vic.tick(65);
+    expect(vic.rasterLine).toBe(1);
+    expect(vic.rasterCycle).toBe(1);
   });
 
   it('reads the live raster high bit through $D011', () => {

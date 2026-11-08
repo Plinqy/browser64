@@ -4,17 +4,17 @@
 
 `src/core` is the browser-independent Commodore 64 hardware model. It does not depend on DOM, Canvas, Web Audio, host timers, keyboard-event names, file pickers, or wall-clock state.
 
-Version 0.8 contains:
+Version 0.9 contains:
 
-- `cpu/` — cycle-steppable MOS 6510/NMOS 6502 engine for all 151 official opcodes.
-- `memory/` — CPU banking plus the VIC's independent memory view.
+- `cpu/` — cycle-steppable MOS 6510/NMOS 6502 engine for all official and stable undocumented opcodes, with interrupt polling and JAM behavior.
+- `memory/` — CPU banking, shared data-bus/open-bus state, and the VIC's independent memory view.
 - `rom/` — BASIC, KERNAL, and character ROM ownership/validation.
 - `program/` — browser-independent PRG parsing and load metadata.
 - `io/` — `$D000-$DFFF` routing, color RAM, joystick pin state, and chip composition.
 - `cia/` — functional MOS 6526 CIAs and physical keyboard matrix.
 - `sid/` — cycle-clocked MOS 6581/8580 voices, ADSR, DACs, filter/mixer, bus behavior, and PCM sampling.
 - `vic/` — raster memory sequencer, all five legal display modes, hardware sprites, collisions, and BA/AEC arbitration.
-- `machine/` — one-cycle master scheduler, interrupt wiring, ROM startup, and PRG/joystick host-facing machine operations.
+- `machine/` — PAL/NTSC-profiled one-cycle scheduler, interrupt wiring, ROM startup, and PRG/joystick host-facing machine operations.
 - `debugger/` — side-effect-free disassembly and trace formatting.
 
 Every directory under `src/core` contains a README describing overview, architecture, and implementation choices.
@@ -59,7 +59,7 @@ A PRG is treated as a load container rather than an executable. The parser expos
 
 ### Timing model
 
-CPU instructions are decomposed into bus-cycle micro-operations and interleaved with VIC/SID/CIA time one C64 system cycle at a time. The browser's real-time loop merely asks the deterministic core to run enough frames; host elapsed time never changes chip state directly.
+CPU instructions are decomposed into bus-cycle micro-operations and interleaved with VIC/SID/CIA time one C64 system cycle at a time. IRQ/NMI are sampled at the NMOS polling point near instruction completion rather than at an artificial instruction boundary. A machine timing profile supplies the PAL or NTSC system clock and raster geometry to the VIC and SID. The browser's real-time loop merely asks the deterministic core to run enough frames; host elapsed time never changes chip state directly.
 
 ### Interrupt wiring
 

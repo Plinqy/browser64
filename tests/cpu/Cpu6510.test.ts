@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { Cpu6510, UnsupportedOpcodeError } from '../../src/core/cpu/Cpu6510';
+import { Cpu6510, CpuJammedError } from '../../src/core/cpu/Cpu6510';
 import { Flag } from '../../src/core/cpu/Flags';
 import { OPCODES } from '../../src/core/cpu/opcodes';
 import type { Bus } from '../../src/core/memory/Bus';
@@ -42,9 +42,13 @@ describe('Cpu6510 reset and basic execution', () => {
     expect(cpu.getFlag(Flag.Zero)).toBe(false);
   });
 
-  it('throws visibly on an undocumented opcode', () => {
+  it('enters the NMOS JAM state and requires RESET to recover', () => {
     const { cpu } = machine([0x02]);
-    expect(() => cpu.step()).toThrow(UnsupportedOpcodeError);
+    expect(cpu.step()).toBe(2);
+    expect(cpu.jammed).toBe(true);
+    expect(() => cpu.step()).toThrow(CpuJammedError);
+    cpu.reset();
+    expect(cpu.jammed).toBe(false);
   });
 });
 
@@ -236,13 +240,28 @@ describe('stack, subroutines, and interrupts', () => {
     expect(bus.read(0x01fb) & Flag.Break).toBe(Flag.Break);
   });
 
-  it('masks IRQ while I is set and services it after CLI', () => {
-    const { cpu } = machine([0x58, 0xea]); // CLI; NOP
+  it('samples IRQ before CLI changes I, delaying recognition one instruction', () => {
+    const { cpu } = machine([0x58, 0xea, 0xea]); // CLI; NOP; NOP
     cpu.setIrqLine(true);
 
-    expect(cpu.step()).toBe(2); // IRQ masked at boundary; CLI executes
+    expect(cpu.step()).toBe(2); // CLI: penultimate sample still sees I=1.
     expect(cpu.pc).toBe(0x8001);
-    expect(cpu.step()).toBe(7); // IRQ now enters before NOP
+    expect(cpu.step()).toBe(2); // One NOP executes before the pending level is recognized.
+    expect(cpu.pc).toBe(0x8002);
+    expect(cpu.step()).toBe(7);
+    expect(cpu.pc).toBe(0x9000);
+  });
+
+  it('samples IRQ before SEI changes I, so an already-sampled IRQ still enters', () => {
+    const { cpu } = machine([0x58, 0xea, 0x78, 0xea]); // CLI; NOP; SEI; NOP
+
+    cpu.step(); // CLI
+    cpu.step(); // NOP; establishes a clean no-IRQ boundary sample.
+    cpu.setIrqLine(true);
+
+    expect(cpu.step()).toBe(2); // SEI executes, but IRQ was sampled while I was still clear.
+    expect(cpu.getFlag(Flag.InterruptDisable)).toBe(true);
+    expect(cpu.step()).toBe(7);
     expect(cpu.pc).toBe(0x9000);
   });
 
@@ -296,7 +315,7 @@ describe('NMOS read-modify-write bus behavior', () => {
 describe('official opcode execution smoke test', () => {
   it('can decode and execute every documented opcode without hitting an unimplemented mnemonic', () => {
     for (const info of OPCODES) {
-      if (info === undefined) continue;
+      if (info === undefined || info.stability !== 'official') continue;
 
       const bus = new RamBus();
       const start = 0x8000;
