@@ -23,7 +23,7 @@ if (app === null) {
   throw new Error('Missing #app element.');
 }
 
-const machine = new C64Machine();
+export const machine = new C64Machine();
 const sidAudio = new SidAudio(machine.bus.io.sid);
 const traceLines: string[] = [];
 let poweredOn = false;

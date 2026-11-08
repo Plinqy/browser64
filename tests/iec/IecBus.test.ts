@@ -8,7 +8,7 @@ describe('IecBus', () => {
     const c64 = bus.createEndpoint('c64');
     const drive = bus.createEndpoint('drive8');
 
-    expect(bus.snapshot()).toEqual({ atnHigh: true, clockHigh: true, dataHigh: true });
+    expect(bus.snapshot()).toEqual({ atnHigh: true, clockHigh: true, dataHigh: true, resetHigh: true });
 
     c64.setPulledLow('clock', true);
     expect(bus.clockHigh).toBe(false);
@@ -19,6 +19,17 @@ describe('IecBus', () => {
 
     drive.release('clock');
     expect(bus.clockHigh).toBe(true);
+  });
+
+  it('includes RESET as an open-collector bus line', () => {
+    const bus = new IecBus();
+    const c64 = bus.createEndpoint('c64-reset');
+
+    expect(bus.resetHigh).toBe(true);
+    c64.setPulledLow('reset', true);
+    expect(bus.resetHigh).toBe(false);
+    c64.release('reset');
+    expect(bus.resetHigh).toBe(true);
   });
 
   it('keeps endpoint state coherent after a bus-wide release', () => {

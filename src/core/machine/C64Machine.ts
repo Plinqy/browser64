@@ -1,4 +1,7 @@
 import { Cpu6510, type CpuClockResult } from '../cpu/Cpu6510';
+import { C1541Drive, C1541_CLOCK_HZ } from '../drive1541/C1541Drive';
+import type { D64Image } from '../disk/D64Image';
+import type { IecEndpoint } from '../iec/IecBus';
 import { Disassembler } from '../debugger/Disassembler';
 import { TraceFormatter } from '../debugger/TraceFormatter';
 import type { JoystickControl, JoystickPort } from '../io/C64Io';
@@ -22,29 +25,47 @@ export interface C64SystemCycleResult {
  *
  * The system cycle is the actual execution boundary. Each master tick
  * samples VIC-II BA/AEC, advances one 6510 micro-cycle when permitted, advances
- * VIC/CIA/SID time once, and then resynchronizes interrupt lines. v0.9 makes
- * the PAL/NTSC timing profile an immutable machine-level construction choice.
+ * VIC/CIA/SID time once, advances the independent 1 MHz 1541 clock, and then
+ * resynchronizes interrupt lines. PAL/NTSC timing remains a machine-level choice.
  */
 export class C64Machine {
   public readonly bus: C64Bus;
   public readonly cpu: Cpu6510;
   public readonly disassembler: Disassembler;
   public readonly trace: TraceFormatter;
+  public readonly drive1541: C1541Drive;
 
   private cia2IrqWasAsserted = false;
   private restorePressed = false;
   private masterCycleCounter = 0;
   private cpuStallCounter = 0;
+  private driveClockAccumulator = 0;
+  private readonly c64ResetEndpoint: IecEndpoint;
 
   constructor(public readonly timing: VicTimingProfile = PAL_6569_TIMING) {
     this.bus = new C64Bus(timing);
     this.cpu = new Cpu6510(this.bus);
+    this.drive1541 = new C1541Drive(this.bus.io.iecBus, 8);
+    this.c64ResetEndpoint = this.bus.io.iecBus.createEndpoint('c64-reset');
     this.disassembler = new Disassembler(this.bus);
     this.trace = new TraceFormatter(this.cpu);
   }
 
   loadRom(kind: C64RomKind, bytes: ArrayLike<number>): void {
     this.bus.roms.load(kind, bytes);
+  }
+
+  load1541Rom(bytes: ArrayLike<number>): void {
+    this.drive1541.loadRom(bytes);
+    this.drive1541.reset();
+  }
+
+  mountD64In1541(imageOrBytes: D64Image | ArrayLike<number>): D64Image {
+    return this.drive1541.mountD64(imageOrBytes);
+  }
+
+  eject1541Disk(): void {
+    this.drive1541.ejectDisk();
   }
 
   /**
@@ -60,8 +81,12 @@ export class C64Machine {
     this.restorePressed = false;
     this.masterCycleCounter = 0;
     this.cpuStallCounter = 0;
+    this.driveClockAccumulator = 0;
+    this.c64ResetEndpoint.setPulledLow('reset', true);
+    this.drive1541.powerOn();
     const cycles = this.cpu.reset();
     this.advanceResetCycles(cycles);
+    this.c64ResetEndpoint.release('reset');
     return cycles;
   }
 
@@ -76,8 +101,12 @@ export class C64Machine {
     this.restorePressed = false;
     this.masterCycleCounter = 0;
     this.cpuStallCounter = 0;
+    this.driveClockAccumulator = 0;
+    this.c64ResetEndpoint.setPulledLow('reset', true);
+    this.drive1541.reset();
     const cycles = this.cpu.reset();
     this.advanceResetCycles(cycles);
+    this.c64ResetEndpoint.release('reset');
     return cycles;
   }
 
@@ -113,6 +142,7 @@ export class C64Machine {
 
     // VIC and CIAs never stop when the 6510 is denied the bus.
     this.bus.io.tick(1);
+    this.advance1541Clock();
     this.masterCycleCounter += 1;
     this.syncInterruptLines();
 
@@ -204,8 +234,18 @@ export class C64Machine {
   private advanceResetCycles(cycles: number): void {
     for (let i = 0; i < cycles; i += 1) {
       this.bus.io.tick(1);
+      this.advance1541Clock();
       this.masterCycleCounter += 1;
       this.syncInterruptLines();
+    }
+  }
+
+
+  private advance1541Clock(): void {
+    this.driveClockAccumulator += C1541_CLOCK_HZ;
+    while (this.driveClockAccumulator >= this.timing.systemClockHz) {
+      this.drive1541.tick();
+      this.driveClockAccumulator -= this.timing.systemClockHz;
     }
   }
 

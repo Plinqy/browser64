@@ -1,19 +1,21 @@
-export type IecLine = 'atn' | 'clock' | 'data';
+export type IecLine = 'atn' | 'clock' | 'data' | 'reset';
 
 export interface IecBusSnapshot {
   readonly atnHigh: boolean;
   readonly clockHigh: boolean;
   readonly dataHigh: boolean;
+  readonly resetHigh: boolean;
 }
 
 const LINE_MASK: Readonly<Record<IecLine, number>> = Object.freeze({
   atn: 0x01,
   clock: 0x02,
-  data: 0x04
+  data: 0x04,
+  reset: 0x08
 });
 
 /**
- * One participant on the three-wire serial IEC bus.
+ * One participant on the serial IEC bus.
  *
  * IEC signal drivers are open collector: an endpoint can only pull a line low
  * or release it. The bus resolves high only when every endpoint releases the
@@ -66,6 +68,10 @@ export class IecEndpoint {
     return this.bus.dataHigh;
   }
 
+  get resetHigh(): boolean {
+    return this.bus.resetHigh;
+  }
+
   snapshot(): IecBusSnapshot {
     return this.bus.snapshot();
   }
@@ -94,11 +100,11 @@ export class IecEndpoint {
 }
 
 /**
- * Open-collector Commodore serial IEC bus for ATN, CLOCK, and DATA.
+ * Open-collector Commodore serial IEC bus for ATN, CLOCK, DATA, and RESET.
  *
  * `true` means a line is electrically released/high; `false` means at least
- * one participant is pulling it low. SRQ and RESET are deliberately deferred
- * until a physical drive/tape/peripheral model needs them.
+ * one participant is pulling it low. RESET is included for physical drive reset
+ * propagation; SRQ remains deferred until a peripheral model needs it.
  */
 export class IecBus {
   private readonly endpointMasks = new Map<number, number>();
@@ -132,11 +138,16 @@ export class IecBus {
     return (this.aggregateLowMask & LINE_MASK.data) === 0;
   }
 
+  get resetHigh(): boolean {
+    return (this.aggregateLowMask & LINE_MASK.reset) === 0;
+  }
+
   snapshot(): IecBusSnapshot {
     return {
       atnHigh: this.atnHigh,
       clockHigh: this.clockHigh,
-      dataHigh: this.dataHigh
+      dataHigh: this.dataHigh,
+      resetHigh: this.resetHigh
     };
   }
 
@@ -154,7 +165,7 @@ export class IecBus {
     if (!this.endpointMasks.has(id)) {
       throw new Error(`Unknown IEC endpoint ${id}.`);
     }
-    this.endpointMasks.set(id, lowMask & 0x07);
+    this.endpointMasks.set(id, lowMask & 0x0f);
     this.recomputeAggregate();
   }
 
@@ -170,6 +181,6 @@ export class IecBus {
     for (const endpointMask of this.endpointMasks.values()) {
       mask |= endpointMask;
     }
-    this.aggregateLowMask = mask & 0x07;
+    this.aggregateLowMask = mask & 0x0f;
   }
 }
