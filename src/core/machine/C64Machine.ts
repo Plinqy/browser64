@@ -1,3 +1,5 @@
+import { GenericCartridge, type RawCartridgeMode } from '../cartridge/GenericCartridge';
+import { parseCrt, type CrtImage } from '../cartridge/CrtImage';
 import { Cpu6510, type CpuClockResult } from '../cpu/Cpu6510';
 import { C1541Drive, C1541_CLOCK_HZ } from '../drive1541/C1541Drive';
 import type { D64Image } from '../disk/D64Image';
@@ -8,6 +10,7 @@ import type { JoystickControl, JoystickPort } from '../io/C64Io';
 import { C64Bus } from '../memory/C64Bus';
 import { parsePrg, type PrgLoadResult } from '../program/Prg';
 import type { C64RomKind } from '../rom/RomSet';
+import { TapImage } from '../tape/TapImage';
 import { PAL_6569_TIMING, type VicTimingProfile } from '../vic/VicTiming';
 
 export interface C64SystemCycleResult {
@@ -66,6 +69,42 @@ export class C64Machine {
 
   eject1541Disk(): void {
     this.drive1541.ejectDisk();
+  }
+
+  mountCrt(bytes: ArrayLike<number>): CrtImage {
+    const crt = parseCrt(bytes);
+    this.bus.attachCartridge(GenericCartridge.fromParsedCrt(crt));
+    return crt;
+  }
+
+  mountRawCartridge(bytes: ArrayLike<number>, mode: RawCartridgeMode, name?: string): void {
+    this.bus.attachCartridge(GenericCartridge.fromRaw(bytes, mode, name));
+  }
+
+  ejectCartridge(): void {
+    this.bus.detachCartridge();
+  }
+
+  mountTap(bytes: ArrayLike<number>): TapImage {
+    const image = TapImage.parse(bytes);
+    this.bus.datasette.mount(image);
+    return image;
+  }
+
+  ejectTape(): void {
+    this.bus.datasette.eject();
+  }
+
+  playTape(): void {
+    this.bus.datasette.pressPlay();
+  }
+
+  stopTape(): void {
+    this.bus.datasette.pressStop();
+  }
+
+  rewindTape(): void {
+    this.bus.datasette.rewind();
   }
 
   /**
@@ -142,6 +181,7 @@ export class C64Machine {
 
     // VIC and CIAs never stop when the 6510 is denied the bus.
     this.bus.io.tick(1);
+    this.bus.tickDatasette(1);
     this.advance1541Clock();
     this.masterCycleCounter += 1;
     this.syncInterruptLines();
@@ -234,6 +274,7 @@ export class C64Machine {
   private advanceResetCycles(cycles: number): void {
     for (let i = 0; i < cycles; i += 1) {
       this.bus.io.tick(1);
+      this.bus.tickDatasette(1);
       this.advance1541Clock();
       this.masterCycleCounter += 1;
       this.syncInterruptLines();
