@@ -10,7 +10,13 @@ describe('DriveMechanism1541', () => {
 
     expect(mechanism.tick().byteReady).toBe(false);
     mechanism.setMotorEnabled(true);
-    expect(mechanism.tick().byteReady).toBe(true);
+
+    // A standard D64 track begins with a sync run. Real 1541 hardware suppresses BYTE READY until the first framed byte after BLOCK SYNC.
+    let syncTicks = 0;
+    while (!mechanism.tick().byteReady && syncTicks < 200) syncTicks += 1;
+    expect(syncTicks).toBeGreaterThan(0);
+    expect(syncTicks).toBeLessThan(200);
+    expect(mechanism.syncAsserted).toBe(false);
 
     mechanism.setDensitySelect(3);
     for (let i = 0; i < 25; i += 1) expect(mechanism.tick().byteReady).toBe(false);

@@ -51,6 +51,22 @@ describe('C64Io address decoding', () => {
   });
 
 
+  it('lets joystick port 2 pull CIA1 Port A low even while KERNAL configures it as output', () => {
+    const io = new C64Io();
+    io.cia1.write(0x02, 0xff); // KERNAL IOINIT: CIA1 Port A outputs for keyboard scanning.
+    io.cia1.write(0x00, 0xff); // No keyboard column intentionally driven low.
+
+    expect(io.cia1.read(0x00) & 0x1f).toBe(0x1f);
+
+    io.setJoystickControl(2, 'up', true);
+    io.setJoystickControl(2, 'fire', true);
+    expect(io.cia1.read(0x00) & 0x1f).toBe(0x0e);
+
+    io.setJoystickControl(2, 'up', false);
+    io.setJoystickControl(2, 'fire', false);
+    expect(io.cia1.read(0x00) & 0x1f).toBe(0x1f);
+  });
+
   it('updates active-low joystick pins through named controls', () => {
     const io = new C64Io();
 

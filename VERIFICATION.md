@@ -113,7 +113,7 @@ The v1.x compatibility claim still does not include exact modeling of:
 - transistor/op-amp-level 6581 filter calibration and per-chip variation;
 - exact SID POT RC timing and analog noise/distortion floor;
 - host-assisted SAVE/REL/SEQ/BAM filesystem creation helpers;
-- chip-specific unstable XAA/LXA/AHX/TAS/SHX/SHY behavior;
+- chip-specific unstable XAA/AHX/TAS/SHX/SHY behavior beyond the C64-profiled LXA `$AB` compatibility model;
 - BRK/IRQ vector hijacking and remaining interrupt races;
 - reset-pin micro-sequencing;
 - analog 1541 PLL/weak-bit/magnetic-transition behavior and every copy-protection scheme;

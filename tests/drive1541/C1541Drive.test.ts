@@ -69,7 +69,14 @@ describe('C1541Drive IEC and CPU integration', () => {
     drive.via1.write(0x00, 0x04); // motor on
     drive.cpu.setFlag(Flag.Overflow, false);
 
-    drive.tick();
+    // BLOCK SYNC suppresses BYTE READY, so wait for the first framed disk byte before checking SO/V.
+    let ticks = 0;
+    while (!drive.byteReady && ticks < 200) {
+      drive.tick();
+      ticks += 1;
+    }
+
+    expect(ticks).toBeLessThan(200);
     expect(drive.byteReady).toBe(true);
     expect(drive.cpu.getFlag(Flag.Overflow)).toBe(true);
   });

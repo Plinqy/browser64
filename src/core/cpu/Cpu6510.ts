@@ -6,6 +6,16 @@ import type { AddressingMode, CpuSnapshot, CpuState, Mnemonic, OpcodeInfo } from
 
 export type CpuCycleKind = 'read' | 'write';
 
+export interface Cpu6510Options {
+  /**
+   * Magic OR constant for the unstable immediate LXA ($AB) bus-conflict model.
+   * Leave null/undefined to keep LXA execution disabled for an unprofiled CPU.
+   */
+  readonly lxaMagic?: number | null;
+}
+
+export const C64_6510_LXA_MAGIC = 0xee;
+
 export interface CpuClockResult {
   /** True when the current CPU micro-cycle actually advanced. */
   advanced: boolean;
@@ -89,8 +99,14 @@ export class Cpu6510 {
   private sampledNmi = false;
   private jammedValue = false;
   private jamAddress = 0;
+  private readonly lxaMagic: number | null;
 
-  constructor(public readonly bus: Bus) {}
+  constructor(public readonly bus: Bus, options: Cpu6510Options = {}) {
+    const configuredMagic = options.lxaMagic;
+    this.lxaMagic = configuredMagic === undefined || configuredMagic === null
+      ? null
+      : configuredMagic & 0xff;
+  }
 
   reset(): number {
     this.a = 0;
@@ -324,7 +340,8 @@ export class Cpu6510 {
         throw new UnsupportedOpcodeError(opcode, opcodeAddress);
       }
 
-      if (info.stability === 'unstable-undocumented') {
+      if (info.stability === 'unstable-undocumented'
+        && !(info.mnemonic === 'LXA' && this.lxaMagic !== null)) {
         throw new UnstableOpcodeError(opcode, info.mnemonic, opcodeAddress);
       }
 
@@ -907,6 +924,15 @@ export class Cpu6510 {
       case 'EOR': this.a = this.setNZ(this.a ^ value); break;
       case 'LDA': this.a = this.setNZ(value); break;
       case 'LAX': this.a = this.x = this.setNZ(value); break;
+      case 'LXA': {
+        if (this.lxaMagic === null) {
+          throw new Error('LXA reached execution without a configured chip profile.');
+        }
+        const result = this.setNZ((this.a | this.lxaMagic) & value);
+        this.a = result;
+        this.x = result;
+        break;
+      }
       case 'LAS': {
         const result = this.setNZ(value & this.sp);
         this.a = result;
@@ -1186,7 +1212,7 @@ function isReadMnemonic(mnemonic: Mnemonic): boolean {
     || mnemonic === 'CMP' || mnemonic === 'CPX' || mnemonic === 'CPY'
     || mnemonic === 'EOR' || mnemonic === 'LDA' || mnemonic === 'LDX'
     || mnemonic === 'LDY' || mnemonic === 'ORA' || mnemonic === 'SBC'
-    || mnemonic === 'LAX' || mnemonic === 'LAS' || mnemonic === 'ANC'
+    || mnemonic === 'LAX' || mnemonic === 'LXA' || mnemonic === 'LAS' || mnemonic === 'ANC'
     || mnemonic === 'ALR' || mnemonic === 'ARR' || mnemonic === 'AXS';
 }
 

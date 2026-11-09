@@ -52,7 +52,7 @@ describe('C64Machine PRG loading', () => {
     expect(result.loadAddress).toBe(0x0801);
     expect(result.endAddressExclusive).toBe(0x0809);
     expect(result.basicPointersInitialized).toBe(true);
-    expect(machine.bus.readPhysicalRam(0x0801)).toBe(0x0b);
+    expect(machine.bus.readPhysicalRam(0x0801)).toBe(0x07);
     expect(machine.bus.readPhysicalRam(0x002b)).toBe(0x01);
     expect(machine.bus.readPhysicalRam(0x002c)).toBe(0x08);
     expect(machine.bus.readPhysicalRam(0x002d)).toBe(0x09);
@@ -109,6 +109,21 @@ describe('C64Machine PRG loading', () => {
     const machineCode = machine.loadPrg(Uint8Array.of(0x00, 0xc0, 0xea, 0x60));
     expect(machine.launchPrg(machineCode)).toBe('machine-code-jump');
     expect(machine.cpu.pc).toBe(0xc000);
+  });
+});
+
+
+describe('C64Machine 6510 compatibility profile', () => {
+  it('executes the C64 LXA $AB profile used by SHOGUN', () => {
+    const machine = new C64Machine();
+    machine.bus.writePhysicalRam(0x8000, 0xab);
+    machine.bus.writePhysicalRam(0x8001, 0x18);
+    machine.cpu.a = 0x23;
+    machine.startAt(0x8000);
+
+    expect(machine.cpu.step()).toBe(2);
+    expect(machine.cpu.a).toBe(0x08);
+    expect(machine.cpu.x).toBe(0x08);
   });
 });
 

@@ -5,6 +5,7 @@ coverage/
 .DS_Store
 *.log
 src/roms/
+*.rom
 *.d64
 *.t64
 *.sid

@@ -78,7 +78,7 @@ ADC and SBC retain the verified NMOS decimal behavior from earlier releases. In 
 
 The core implements the stable NMOS combinations used by real C64 software: SLO/RLA/SRE/RRA, SAX/LAX, DCP/ISC, ANC/ALR/ARR/AXS, LAS, the `$EB` SBC alias, and all multi-byte NOP forms. Read-modify-write combinations retain the NMOS old-value dummy write and their 5–8 cycle addressing sequences. JAM/KIL enters a stopped state that only `reset()` releases.
 
-The temperature/silicon/bus-sensitive XAA, LXA, AHX, TAS, SHX, and SHY family is still decoded for disassembly but throws `UnstableOpcodeError` instead of inventing a magic constant or page-cross result. That is an intentional accuracy boundary, not a missing decoder entry.
+LXA `$AB` remains electrically unstable on real silicon, but the C64 motherboard profile now supplies the commonly observed 6510 `$EE` magic constant and executes `A = X = (A | $EE) & immediate`. The CPU core keeps that value configurable: an unprofiled CPU still rejects LXA rather than silently assuming C64 behavior. XAA, AHX, TAS, SHX, and SHY remain decoded for disassembly but throw `UnstableOpcodeError` until their chip/bus-specific behavior is modeled.
 
 ### Host/debugger launch point
 

@@ -336,3 +336,18 @@ pre { margin: 0; font: 14px/1.55 "SFMono-Regular", Consolas, "Liberation Mono", 
 @media (max-width: 620px) {
   .toolbar-separator { display: none; }
 }
+
+.control-context {
+  margin: 10px 0 0;
+  border-left: 3px solid #4b4b60;
+  padding: 7px 10px;
+  color: #a8a8ba;
+  background: #12121a;
+  font-size: 0.8rem;
+  line-height: 1.45;
+}
+.control-context.blocked {
+  border-left-color: #8a7043;
+  color: #d3c29f;
+}
+.sid-controls button:disabled { opacity: 0.42; cursor: not-allowed; }

@@ -42,7 +42,7 @@ describe('v1.0.1 release readiness', () => {
     const result = machine.loadPrg(disk.readPrg(entry));
 
     expect(result.loadAddress).toBe(0x0801);
-    expect(machine.bus.readPhysicalRam(0x0801)).toBe(0x0b);
+    expect(machine.bus.readPhysicalRam(0x0801)).toBe(0x07);
     expect(machine.bus.readPhysicalRam(0x002b)).toBe(0x01);
     expect(machine.bus.readPhysicalRam(0x002c)).toBe(0x08);
     expect(machine.launchPrg(result)).toBe('basic-run');
@@ -57,7 +57,7 @@ describe('v1.0.1 release readiness', () => {
     const result = machine.loadPrg(tape.readPrg(entry));
 
     expect(result.loadAddress).toBe(0x0801);
-    expect(machine.bus.readPhysicalRam(0x0801)).toBe(0x0b);
+    expect(machine.bus.readPhysicalRam(0x0801)).toBe(0x07);
     expect(machine.bus.readPhysicalRam(0x002b)).toBe(0x01);
     expect(machine.bus.readPhysicalRam(0x002c)).toBe(0x08);
   });
@@ -95,7 +95,7 @@ function makeT64WithBasicPrg(): Uint8Array {
   writeLe16(bytes, 68, 0x0807);
   writeLe32(bytes, 72, 0xc0);
   writeAscii(bytes, 80, 16, 'BASIC GAME');
-  bytes.set([0x0b, 0x08, 0x0a, 0x00, 0x00, 0x00], 0xc0);
+  bytes.set([0x07, 0x08, 0x0a, 0x00, 0x99, 0x00], 0xc0);
   return bytes;
 }
 

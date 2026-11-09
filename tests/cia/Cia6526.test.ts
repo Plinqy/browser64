@@ -34,8 +34,21 @@ describe('Cia6526 reset and parallel ports', () => {
     cia.write(0x00, 0x3c);
     cia.write(0x02, 0xf0);
 
-    expect(cia.read(0x00)).toBe(0x35);
+    expect(cia.read(0x00)).toBe(0x25);
     expect(cia.portAOutputLowMask).toBe(0xc0);
+  });
+
+  it('reads external lows on output-high port pins like real 6526 hardware', () => {
+    const cia = new Cia6526();
+    cia.setPortAInputProvider(() => 0xee); // UP + FIRE externally grounded.
+    cia.write(0x00, 0xff); // CIA tries to drive every output high.
+    cia.write(0x02, 0xff); // All Port A pins are outputs, as KERNAL configures CIA1.
+
+    expect(cia.read(0x00)).toBe(0xee);
+
+    cia.write(0x00, 0xfe); // CIA itself also drives UP low.
+    cia.setPortAInputProvider(() => 0xff);
+    expect(cia.read(0x00)).toBe(0xfe);
   });
 });
 

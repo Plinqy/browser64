@@ -109,6 +109,12 @@ Executes up to 100 instructions or until a monitor stop condition occurs.
 
 Advances until the VIC-II enters the next video frame.
 
+### Control availability and contextual hints
+
+Browser64 explains state-dependent controls directly in the UI. A disabled button has a tooltip that states the missing prerequisite, and each major control group has a visible context line describing what must happen next. Examples include loading missing motherboard ROMs before **Power On**, powering on before host-assisted PRG/D64/T64 loads, pausing before Step/save-state/live monitor edits, creating a Quick Save before **Quick Load**, mounting media before export/transport operations, and loading a 1541 DOS ROM before true device-8 access.
+
+The UI intentionally distinguishes **disabled because a prerequisite is missing** from **available but optional**. For example, a D64 may be host-browsed without a 1541 ROM, while the 1541 panel explicitly warns that later IEC/device-8 access still requires that ROM.
+
 ## 6. Entering and Running BASIC Programs
 
 After the C64 reaches `READY.`, click the VIC-II display and type BASIC exactly as on a physical C64.
@@ -373,11 +379,18 @@ Important host mappings include:
 | Page Up | RESTORE |
 | Escape | RUN/STOP |
 | Alt | Commodore key |
-| Arrow keys / Space | Keyboard or selected joystick port, according to the capture selector |
+| Arrow keys / Space | C64 cursor/SPACE keys in keyboard mode; joystick directions/Fire in joystick mode |
 
-Joystick input is routed through the real active-low CIA1 port pins.
+Browser64 separates this into two controls below the VIC-II display:
 
-If keyboard input appears dead, click the VIC-II canvas again and confirm the input selector is not routing the keys to a joystick port unexpectedly.
+- **Input mode** — choose `C64 keyboard` or `Joystick`.
+- **Joystick port** — choose `Port 1` or `Port 2` when joystick mode is active. Port 2 is preselected because many commercial games use it.
+
+In **Joystick** mode, Arrow Up/Down/Left/Right close the corresponding joystick switches and **Space is Fire**. Joystick input is routed through the real active-low CIA1 port pins; it is not translated into keyboard presses. Click the VIC-II canvas to capture host input before playing.
+
+Browser64 models the control-port switches as physical pull-downs. Port 2 shares CIA1 Port A (`$DC00`) with the keyboard-column outputs; joystick directions and Fire remain readable even while the KERNAL has DDRA configured as outputs, matching the real 6526/C64 wiring.
+
+If a game says **“Plug joystick into Port 2”**, select `Joystick` and `Port 2`. If keyboard input appears dead, click the VIC-II canvas again and confirm **Input mode** is set to `C64 keyboard`.
 
 ## 17. Save States
 
@@ -507,7 +520,7 @@ Click **Enable / Resume Audio** after interacting with the page. Confirm the emu
 
 ### Keyboard input does not reach BASIC or a game
 
-Click the VIC-II display. Check whether arrow/Space input has been assigned to joystick capture instead of the C64 keyboard.
+Click the VIC-II display. Check **Input mode**. For normal typing choose `C64 keyboard`; for joystick games choose `Joystick`, select the game's requested port, and use Arrow keys for movement plus Space for Fire.
 
 ### A save state refuses to load
 
@@ -528,7 +541,7 @@ Known boundaries include:
 - early VIC revision timing such as 6567R56A;
 - transistor/op-amp-level 6581 filter variation;
 - exact SID POT RC conversion and analog noise floor;
-- unstable opcode silicon-specific behavior;
+- most unstable opcode silicon-specific behavior (LXA `$AB` has a C64 6510 compatibility profile; XAA/AHX/TAS/SHX/SHY remain outside the exactness claim);
 - remaining interrupt-vector race cases;
 - reset-pin micro-sequencing;
 - exact analog 1541 PLL, weak-bit, and magnetic-transition behavior;

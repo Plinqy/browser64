@@ -462,12 +462,16 @@ export class Cia6526 implements MemoryMappedDevice {
 
   get portAPins(): number {
     const external = this.portAInput() & 0xff;
-    return ((this.pra & this.ddra) | (external & ~this.ddra)) & 0xff;
+    // The 6526 data register reads the physical pin level. An output-low CIA
+    // driver always wins, while an external device (keyboard/joystick) may
+    // still pull an output-high pin low. This is required for C64 joystick
+    // port 2 because KERNAL normally leaves CIA1 DDRA configured as outputs.
+    return ((this.pra | ~this.ddra) & external) & 0xff;
   }
 
   get portBPins(): number {
     const external = this.portBInput() & 0xff;
-    let value = ((this.prb & this.ddrb) | (external & ~this.ddrb)) & 0xff;
+    let value = ((this.prb | ~this.ddrb) & external) & 0xff;
 
     if ((this.cra & 0x02) !== 0) {
       value = setBit(value, 6, this.timerAOutput);

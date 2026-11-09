@@ -105,9 +105,9 @@ export class DriveMechanism1541 {
           this.advanceByte();
         }
         this.byteCountdown = this.cyclesForCurrentByte();
-        // BYTE READY paces both reads and writes. CA2/SOE separately decides
-        // whether it reaches the 6502 overflow input.
-        byteReady = true;
+        // BLOCK SYNC suppresses BYTE READY during reads; framing resumes on the first post-sync GCR byte. Writes still pace every completed byte.
+        // CA2/SOE separately decides whether BYTE READY reaches the 6502 overflow input.
+        byteReady = !this.readMode || !this.currentSyncLow;
       }
     }
 

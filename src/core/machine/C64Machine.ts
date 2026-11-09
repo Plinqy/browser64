@@ -1,7 +1,7 @@
 import { cartridgeFromCrt } from '../cartridge/BankedCartridge';
 import { GenericCartridge, type RawCartridgeMode } from '../cartridge/GenericCartridge';
 import { parseCrt, type CrtImage } from '../cartridge/CrtImage';
-import { Cpu6510, type CpuClockResult } from '../cpu/Cpu6510';
+import { C64_6510_LXA_MAGIC, Cpu6510, type CpuClockResult } from '../cpu/Cpu6510';
 import type { CpuState } from '../cpu/types';
 import { C1541Drive, C1541_CLOCK_HZ } from '../drive1541/C1541Drive';
 import type { D64Image } from '../disk/D64Image';
@@ -81,7 +81,7 @@ export class C64Machine {
     const normalized = isTimingProfile(options) ? { timing: options } : options;
     this.timing = normalized.timing ?? PAL_6569_TIMING;
     this.bus = new C64Bus(this.timing, normalized.sidModel ?? '6581');
-    this.cpu = new Cpu6510(this.bus);
+    this.cpu = new Cpu6510(this.bus, { lxaMagic: C64_6510_LXA_MAGIC });
     this.drive1541 = new C1541Drive(this.bus.io.iecBus, 8);
     this.c64ResetEndpoint = this.bus.io.iecBus.createEndpoint('c64-reset');
     this.disassembler = new Disassembler(this.bus);

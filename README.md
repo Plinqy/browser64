@@ -53,7 +53,7 @@ Version **1.0.1** is the first maintenance release of Browser64. It retains the 
 - complete 8×8 C64 keyboard matrix
 - browser keyboard adapter with shifted cursor/function-key behavior
 - joystick ports 1 and 2 through the real active-low CIA1 pins
-- selectable arrow-key/Space joystick capture
+- explicit C64-keyboard/joystick input mode with selectable control port; Arrow keys drive directions and Space drives Fire
 - CIA2 VIC-bank output
 - CIA1 IRQ and CIA2 NMI integration
 - RESTORE as a separate NMI source rather than a fake CIA FLAG input
@@ -160,7 +160,7 @@ Version **1.0.1** is the first maintenance release of Browser64. It retains the 
 - Escape = RUN/STOP
 - Alt = Commodore key
 - both C64 shift keys, cursor keys, function keys, punctuation, and common printable keys
-- joystick capture selector for control port 1 or 2
+- explicit Input mode selector plus Joystick port 1/2 selector (Port 2 preselected for game use)
 - debugger Step / Run 100 / Run Frame controls remain available while paused
 - quick save/load plus portable `.c64state` import/export
 - IndexedDB persistence for ROMs, mounted media, preferences, and quick state
@@ -334,7 +334,7 @@ The following remain intentionally outside the v1.0 compatibility claim and are 
 - transistor/op-amp-level 6581 filter calibration and per-chip variation
 - exact SID POT RC conversion timing and analog noise/distortion floor
 - host-assisted SAVE/REL/SEQ creation and DOS-level BAM allocation helpers
-- chip-specific unstable XAA/LXA/AHX/TAS/SHX/SHY behavior
+- chip-specific unstable XAA/AHX/TAS/SHX/SHY behavior beyond the C64-profiled LXA `$AB` compatibility model
 - BRK/IRQ vector hijacking and remaining interrupt race edge cases
 - reset-pin micro-sequencing
 - exact analog 1541 PLL/weak-bit/magnetic-transition behavior and every copy-protection scheme

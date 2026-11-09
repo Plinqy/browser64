@@ -95,6 +95,23 @@ describe('HostInputController', () => {
     expect(keyboard.readRows(0xff)).toBe(0xff);
   });
 
+  it('releases a held joystick control when switching ports and routes new input to the new port', () => {
+    const { controller, joystickEvents } = fixture();
+    controller.setJoystickCapture(1);
+    controller.keyDown('ArrowLeft', 'ArrowLeft');
+
+    controller.setJoystickCapture(2);
+    controller.keyDown('Space', ' ');
+    controller.keyUp('Space');
+
+    expect(joystickEvents).toEqual([
+      [1, 'left', true],
+      [1, 'left', false],
+      [2, 'fire', true],
+      [2, 'fire', false]
+    ]);
+  });
+
   it('releases held matrix, RESTORE, and joystick state on blur-style releaseAll', () => {
     const { keyboard, controller, restoreEvents, joystickEvents } = fixture();
     controller.setJoystickCapture(1);

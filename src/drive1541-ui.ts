@@ -31,6 +31,7 @@ panel.innerHTML = `
     <button id="drive-export-media" type="button">Export Mounted Disk</button>
     <span id="drive1541-detail">Drive 8 · no ROM · no disk</span>
   </div>
+  <p id="drive1541-context" class="control-context" aria-live="polite"></p>
 `;
 diskPanel.insertAdjacentElement('afterend', panel);
 
@@ -40,6 +41,7 @@ const writeProtect = requireInput('drive-write-protect');
 const exportButton = requireButton('drive-export-media');
 const status = requireElement('drive1541-status');
 const detail = requireElement('drive1541-detail');
+const context = requireElement('drive1541-context');
 const d64Input = requireInput('d64-file');
 
 let mountedFilename = 'disk';
@@ -162,7 +164,25 @@ function renderDriveStatus(): void {
     mechanism.motorOn ? 'motor on' : 'motor off',
     mechanism.activityLedOn ? 'LED on' : 'LED off'
   ].join(' · ');
-  exportButton.disabled = !mechanism.mounted;
+  const exportReason = mechanism.mounted ? null : 'Mount a D64 or G64 disk first.';
+  exportButton.disabled = exportReason !== null;
+  exportButton.title = exportReason === null
+    ? 'Export the currently mounted D64/G64, including retained writes.'
+    : `Unavailable: ${exportReason}`;
+  writeProtect.disabled = !mechanism.mounted;
+  writeProtect.title = mechanism.mounted
+    ? 'Toggle the drive mechanism write-protect sensor for the mounted disk.'
+    : 'Mount a disk before changing drive write protection.';
+
+  const message = !drive.romLoaded
+    ? mechanism.mounted
+      ? 'Disk is mounted, but device-8 LOAD/SAVE requires a 16 KiB 1541 DOS ROM. Host-assisted D64 loading remains available without it.'
+      : 'Load a 16 KiB 1541 DOS ROM for true device-8 operation, then mount a D64 or G64.'
+    : !mechanism.mounted
+      ? '1541 DOS ROM ready. Mount a D64/G64 before using device 8 or exporting media.'
+      : 'True drive ready: the 1541 ROM and disk are mounted. Export Mounted Disk preserves retained writes.';
+  context.textContent = message;
+  context.classList.toggle('blocked', !drive.romLoaded || !mechanism.mounted);
 }
 
 function formatTrack(track: number): string {

@@ -35,6 +35,7 @@ panel.innerHTML = `
     <button id="freeze-cart" type="button">FREEZE</button>
     <button id="eject-cart" type="button">Eject Cartridge</button>
   </div>
+  <p id="expansion-context" class="control-context" aria-live="polite"></p>
   <hr />
   <div class="panel-heading">
     <div>
@@ -57,6 +58,7 @@ panel.innerHTML = `
     <button id="tape-save" type="button">SAVE TAP</button>
     <button id="tape-eject" type="button">EJECT</button>
   </div>
+  <p id="tape-context" class="control-context" aria-live="polite"></p>
 `;
 anchor.insertAdjacentElement('afterend', panel);
 
@@ -64,10 +66,20 @@ const crtInput = input('crt-file');
 const rawInput = input('raw-cart-file');
 const rawMode = select('raw-cart-mode');
 const expansionStatus = element('expansion-status');
+const expansionContext = element('expansion-context');
+const freezeButton = button('freeze-cart');
+const ejectCartridgeButton = button('eject-cart');
 const tapeInput = input('tap-file');
 const tapeStatus = element('tape-status');
+const tapeContext = element('tape-context');
 const tapeWriteProtect = input('tape-write-protect');
+const tapeNew = button('tape-new');
+const tapePlay = button('tape-play');
+const tapeRecord = button('tape-record');
+const tapeStop = button('tape-stop');
+const tapeRewind = button('tape-rewind');
 const tapeSave = button('tape-save');
+const tapeEject = button('tape-eject');
 
 let tapeFilename = 'recording.tap';
 
@@ -80,6 +92,7 @@ crtInput.addEventListener('change', async () => {
     await browserSessionStore.putAsset('cartridge', { name: file.name, bytes, mediaType: 'crt' });
     expansionStatus.textContent = `${crt.name || file.name} · HW ${crt.hardwareType} · ${machine.bus.configuration.cartridgeMode}`;
     expansionStatus.classList.add('ready');
+    renderExpansionStatus();
   } catch (error) {
     showError(expansionStatus, error);
   }
@@ -97,19 +110,21 @@ rawInput.addEventListener('change', async () => {
     });
     expansionStatus.textContent = `${file.name} · ${machine.bus.configuration.cartridgeMode}`;
     expansionStatus.classList.add('ready');
+    renderExpansionStatus();
   } catch (error) {
     showError(expansionStatus, error);
   }
 });
 
-button('freeze-cart').addEventListener('click', () => machine.pressCartridgeFreeze());
-button('eject-cart').addEventListener('click', () => {
+freezeButton.addEventListener('click', () => machine.pressCartridgeFreeze());
+ejectCartridgeButton.addEventListener('click', () => {
   machine.ejectCartridge();
   void browserSessionStore.removeAsset('cartridge');
   crtInput.value = '';
   rawInput.value = '';
   expansionStatus.textContent = 'No cartridge';
   expansionStatus.classList.remove('ready');
+  renderExpansionStatus();
 });
 
 tapeInput.addEventListener('change', async () => {
@@ -129,7 +144,7 @@ tapeInput.addEventListener('change', async () => {
   }
 });
 
-button('tape-new').addEventListener('click', () => {
+tapeNew.addEventListener('click', () => {
   machine.newBlankTape();
   const bytes = machine.exportTape();
   if (bytes !== null) void browserSessionStore.putAsset('tape', {
@@ -140,19 +155,19 @@ button('tape-new').addEventListener('click', () => {
   tapeWriteProtect.checked = false;
   renderTapeStatus();
 });
-button('tape-play').addEventListener('click', () => machine.playTape());
-button('tape-record').addEventListener('click', () => {
+tapePlay.addEventListener('click', () => machine.playTape());
+tapeRecord.addEventListener('click', () => {
   try {
     machine.recordTape();
   } catch (error) {
     showError(tapeStatus, error);
   }
 });
-button('tape-stop').addEventListener('click', () => {
+tapeStop.addEventListener('click', () => {
   machine.stopTape();
   void persistTape();
 });
-button('tape-rewind').addEventListener('click', () => machine.rewindTape());
+tapeRewind.addEventListener('click', () => machine.rewindTape());
 tapeWriteProtect.addEventListener('change', () => {
   machine.setTapeWriteProtected(tapeWriteProtect.checked);
   void persistTape();
@@ -164,7 +179,7 @@ tapeSave.addEventListener('click', () => {
   downloadBytes(bytes, modifiedTapeName(tapeFilename));
   void persistTape();
 });
-button('tape-eject').addEventListener('click', () => {
+tapeEject.addEventListener('click', () => {
   machine.ejectTape();
   void browserSessionStore.removeAsset('tape');
   tapeInput.value = '';
@@ -194,17 +209,49 @@ void sessionReady.then((session) => {
     tapeFilename = tape.name;
     tapeWriteProtect.checked = tape.writeProtected ?? false;
   }
+  renderExpansionStatus();
   renderTapeStatus();
 });
 
+function renderExpansionStatus(): void {
+  const cartridge = machine.bus.expansion.cartridge;
+  const hasCartridge = cartridge !== null;
+  const supportsFreeze = cartridge?.freeze !== undefined;
+  freezeButton.disabled = !supportsFreeze;
+  freezeButton.title = !hasCartridge
+    ? 'Unavailable: Mount a cartridge first.'
+    : supportsFreeze
+      ? 'Press the mounted cartridge FREEZE control.'
+      : 'Unavailable: The mounted cartridge does not implement a FREEZE control.';
+  ejectCartridgeButton.disabled = !hasCartridge;
+  ejectCartridgeButton.title = hasCartridge ? 'Eject the mounted cartridge.' : 'Unavailable: No cartridge is mounted.';
+  expansionContext.textContent = !hasCartridge
+    ? 'Mount a CRT or raw cartridge to enable cartridge actions. FREEZE is enabled only for cartridge hardware that implements a freeze hook.'
+    : supportsFreeze
+      ? `${cartridge.name} is mounted; FREEZE and Eject Cartridge are available.`
+      : `${cartridge.name} is mounted. Eject Cartridge is available; this cartridge has no implemented FREEZE hook.`;
+  expansionContext.classList.toggle('blocked', !hasCartridge || !supportsFreeze);
+}
+
 function renderTapeStatus(): void {
   const tape = machine.bus.datasette.snapshot();
+  tapeNew.title = 'Create and mount a new blank writable C64 TAP v1 image.';
   if (!tape.mounted) {
     tapeStatus.textContent = 'No tape';
     tapeStatus.classList.remove('ready');
-    tapeSave.disabled = true;
+    setTapeButton(tapePlay, 'Mount a TAP or create a blank tape first.', 'Start Datasette playback.');
+    setTapeButton(tapeRecord, 'Mount a writable TAP or create a blank tape first.', 'Engage RECORD + PLAY.');
+    setTapeButton(tapeStop, 'No tape is mounted.', 'Stop the Datasette transport.');
+    setTapeButton(tapeRewind, 'No tape is mounted.', 'Rewind the mounted tape to the beginning.');
+    setTapeButton(tapeSave, 'No tape is mounted.', 'Export the current TAP image.');
+    setTapeButton(tapeEject, 'No tape is mounted.', 'Eject the mounted tape.');
+    tapeWriteProtect.disabled = true;
+    tapeWriteProtect.title = 'Mount a tape before changing write protection.';
+    tapeContext.textContent = 'Mount a TAP file or choose NEW BLANK to enable Datasette transport controls.';
+    tapeContext.classList.add('blocked');
     return;
   }
+
   tapeStatus.textContent = [
     tape.recordPressed ? 'RECORD' : tape.playPressed ? 'PLAY' : 'STOP',
     tape.motorOn ? 'motor on' : 'motor off',
@@ -213,8 +260,26 @@ function renderTapeStatus(): void {
     tape.atEnd ? 'end' : `offset ${tape.dataOffset}`
   ].join(' · ');
   tapeStatus.classList.add('ready');
-  tapeSave.disabled = false;
+  setTapeButton(tapePlay, null, 'Start or continue Datasette playback from the current tape position.');
+  setTapeButton(tapeRecord, tape.writeProtected ? 'The mounted tape is write-protected.' : null, 'Engage RECORD + PLAY from the current tape position.');
+  setTapeButton(tapeStop, null, 'Stop playback/recording and commit any pending recording pulses.');
+  setTapeButton(tapeRewind, null, 'Rewind the mounted tape to the beginning.');
+  setTapeButton(tapeSave, null, 'Export the current tape as a C64 TAP image.');
+  setTapeButton(tapeEject, null, 'Eject the mounted tape.');
+  tapeWriteProtect.disabled = false;
+  tapeWriteProtect.title = 'Prevent or allow recording to the mounted tape.';
+  tapeContext.textContent = tape.writeProtected
+    ? 'Tape mounted and write-protected: PLAY/STOP/REWIND/SAVE/EJECT are available; RECORD is unavailable.'
+    : 'Tape mounted and writable: PLAY, RECORD, STOP, REWIND, SAVE, and EJECT are available.';
+  tapeContext.classList.toggle('blocked', tape.writeProtected);
 }
+
+/** Keep Datasette buttons disabled only when their physical prerequisite is missing. */
+function setTapeButton(control: HTMLButtonElement, disabledReason: string | null, enabledHint: string): void {
+  control.disabled = disabledReason !== null;
+  control.title = disabledReason === null ? enabledHint : `Unavailable: ${disabledReason}`;
+}
+
 
 function modifiedTapeName(filename: string): string {
   return filename.toLowerCase().endsWith('.tap')
@@ -235,6 +300,7 @@ function downloadBytes(bytes: Uint8Array, filename: string): void {
 }
 
 function tick(): void {
+  renderExpansionStatus();
   renderTapeStatus();
   requestAnimationFrame(tick);
 }
@@ -268,5 +334,6 @@ function showError(target: HTMLElement, error: unknown): void {
   target.classList.remove('ready');
 }
 
+renderExpansionStatus();
 renderTapeStatus();
 requestAnimationFrame(tick);

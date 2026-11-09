@@ -59,6 +59,8 @@ let selectedT64Prg: T64DirectoryEntry | null = null;
 let animationFrame: number | null = null;
 let lastAnimationTime = 0;
 let frameAccumulatorMs = 0;
+let quickStateAvailable = false;
+let quickStateKnown = false;
 export let sessionReady: Promise<RestoredBrowserSession>;
 
 app.innerHTML = `
@@ -95,11 +97,12 @@ app.innerHTML = `
       <button id="run-frame" disabled>Run Frame</button>
       <span class="toolbar-separator" aria-hidden="true"></span>
       <button id="quick-save" disabled>Quick Save</button>
-      <button id="quick-load">Quick Load</button>
+      <button id="quick-load" disabled>Quick Load</button>
       <button id="export-state" disabled>Export State</button>
-      <label class="state-file-label">Import State<input id="state-file" type="file" accept=".json,.c64state,application/json" /></label>
+      <label class="state-file-label" id="import-state-label">Import State<input id="state-file" type="file" accept=".json,.c64state,application/json" /></label>
       <button id="clear-session">Forget Saved Session</button>
     </section>
+    <p id="machine-control-hint" class="control-context" aria-live="polite"></p>
 
     <div id="error" class="error-banner" hidden></div>
 
@@ -129,6 +132,7 @@ app.innerHTML = `
         <button id="audio-enable">Enable / Resume Audio</button>
         <button id="audio-mute">Mute</button>
       </div>
+      <p id="sid-control-hint" class="control-context" aria-live="polite"></p>
     </article>
 
     <article class="panel display-panel">
@@ -144,15 +148,22 @@ app.innerHTML = `
       </div>
       <div class="input-toolbar">
         <label>
-          Arrow keys / Space
-          <select id="joystick-capture">
+          Input mode
+          <select id="input-mode">
             <option value="keyboard">C64 keyboard</option>
-            <option value="1">Joystick port 1</option>
-            <option value="2">Joystick port 2</option>
+            <option value="joystick">Joystick</option>
           </select>
         </label>
-        <span id="input-status">Click display to type</span>
+        <label>
+          Joystick port
+          <select id="joystick-port">
+            <option value="1">Port 1</option>
+            <option value="2" selected>Port 2</option>
+          </select>
+        </label>
+        <span id="input-status">Click display to capture input</span>
       </div>
+      <p id="input-control-hint" class="control-context" aria-live="polite"></p>
     </article>
 
     <article id="program-panel" class="panel program-panel">
@@ -168,6 +179,7 @@ app.innerHTML = `
         <button id="load-prg" disabled>Load Only</button>
         <button id="run-prg" disabled>Load + Run/Start</button>
       </div>
+      <p id="prg-control-hint" class="control-context" aria-live="polite"></p>
     </article>
 
     <article class="panel disk-panel">
@@ -189,6 +201,7 @@ app.innerHTML = `
         <button id="load-d64-prg" disabled>Host-assisted Load Only</button>
         <button id="run-d64-prg" disabled>Host-assisted Load + Run/Start</button>
       </div>
+      <p id="d64-control-hint" class="control-context" aria-live="polite"></p>
       <pre id="d64-directory" class="disk-directory">Mount a D64 to browse its directory.</pre>
     </article>
 
@@ -211,6 +224,7 @@ app.innerHTML = `
         <button id="load-t64-prg" disabled>Host-assisted Load Only</button>
         <button id="run-t64-prg" disabled>Host-assisted Load + Run/Start</button>
       </div>
+      <p id="t64-control-hint" class="control-context" aria-live="polite"></p>
       <pre id="t64-directory" class="disk-directory">Choose a T64 to browse its entries.</pre>
     </article>
 
@@ -247,6 +261,7 @@ app.innerHTML = `
         <div id="monitor-status" class="status-pill">Monitor ready</div>
       </div>
 
+      <p id="monitor-control-hint" class="control-context" aria-live="polite"></p>
       <div class="monitor-controls">
         <fieldset>
           <legend>Execution stops</legend>
@@ -326,6 +341,14 @@ const d64DirectoryElement = mustElement('d64-directory');
 const t64StatusElement = mustElement('t64-status');
 const t64DirectoryElement = mustElement('t64-directory');
 const monitorStatusElement = mustElement('monitor-status');
+const machineControlHintElement = mustElement('machine-control-hint');
+const sidControlHintElement = mustElement('sid-control-hint');
+const prgControlHintElement = mustElement('prg-control-hint');
+const d64ControlHintElement = mustElement('d64-control-hint');
+const t64ControlHintElement = mustElement('t64-control-hint');
+const monitorControlHintElement = mustElement('monitor-control-hint');
+const inputControlHintElement = mustElement('input-control-hint');
+const importStateLabel = mustElement('import-state-label');
 const monitorBreakpointsElement = mustElement('monitor-breakpoints');
 const monitorMemoryElement = mustElement('monitor-memory');
 const monitorHistoryElement = mustElement('monitor-history');
@@ -358,7 +381,8 @@ const t64Input = mustInput('t64-file');
 const t64PrgSelect = mustSelect('t64-prg');
 const loadT64PrgButton = mustButton('load-t64-prg');
 const runT64PrgButton = mustButton('run-t64-prg');
-const joystickSelect = mustSelect('joystick-capture');
+const inputModeSelect = mustSelect('input-mode');
+const joystickPortSelect = mustSelect('joystick-port');
 const videoStandardSelect = mustSelect('video-standard');
 const sidModelSelect = mustSelect('sid-model');
 const audioEnableButton = mustButton('audio-enable');
@@ -597,8 +621,15 @@ programPanel.addEventListener('drop', (event) => {
   }
 });
 
-joystickSelect.addEventListener('change', () => {
-  hostInput.setJoystickCapture(joystickCaptureFromValue(joystickSelect.value));
+inputModeSelect.addEventListener('change', () => {
+  applyHostInputMode();
+  void persistPreferences();
+  updateInputStatus();
+  vicCanvas.focus();
+});
+
+joystickPortSelect.addEventListener('change', () => {
+  applyHostInputMode();
   void persistPreferences();
   updateInputStatus();
   vicCanvas.focus();
@@ -624,17 +655,20 @@ sidModelSelect.addEventListener('change', () => {
   machine.bus.io.sid.setModel(sidModelSelect.value as SidChipModel);
   void persistPreferences();
   sidAudio.clear();
+  updateControls();
   render();
 });
 
 audioEnableButton.addEventListener('click', async () => {
   await tryStartAudio();
+  updateControls();
   render();
 });
 
 audioMuteButton.addEventListener('click', () => {
   sidAudio.setMuted(!sidAudio.isMuted);
   audioMuteButton.textContent = sidAudio.isMuted ? 'Unmute' : 'Mute';
+  updateControls();
   render();
 });
 
@@ -643,11 +677,14 @@ quickSaveButton.addEventListener('click', async () => {
   try {
     const state = machine.saveState();
     await browserSessionStore.saveQuickState(state);
+    quickStateAvailable = true;
+    quickStateKnown = true;
     traceLines.push(`QUICK SAVE -> frame ${machine.bus.io.vic.frameNumber} PC=$${hex(machine.cpu.pc, 4)}`);
     lastError = '';
   } catch (error) {
     lastError = errorMessage(error);
   }
+  updateControls();
   render();
 });
 
@@ -694,11 +731,14 @@ stateFileInput.addEventListener('change', async () => {
 clearSessionButton.addEventListener('click', async () => {
   try {
     await browserSessionStore.clearAll();
+    quickStateAvailable = false;
+    quickStateKnown = true;
     traceLines.push('BROWSER SESSION STORAGE CLEARED');
     lastError = '';
   } catch (error) {
     lastError = errorMessage(error);
   }
+  updateControls();
   render();
 });
 
@@ -723,6 +763,8 @@ monitorAddRasterButton.addEventListener('click', () => monitorAction(() => {
   const breakpoint = machine.monitor.addRasterBreakpoint(line, cycle);
   monitorRemoveIdInput.value = String(breakpoint.id);
 }));
+
+monitorRemoveIdInput.addEventListener('input', updateControls);
 
 monitorRemoveBreakButton.addEventListener('click', () => monitorAction(() => {
   const id = parseDecimalField(monitorRemoveIdInput, 'breakpoint ID');
@@ -811,8 +853,15 @@ clearMountedT64();
 updateInputStatus();
 render();
 sessionReady = restorePersistedSession();
-void sessionReady.catch((error) => {
+void sessionReady.then(async () => {
+  quickStateAvailable = await browserSessionStore.loadQuickState() !== null;
+  quickStateKnown = true;
+  updateControls();
+  render();
+}).catch((error) => {
+  quickStateKnown = true;
   lastError = `Session restore: ${errorMessage(error)}`;
+  updateControls();
   render();
 });
 
@@ -842,6 +891,7 @@ function setRunning(next: boolean): void {
   if (running && animationFrame === null) {
     animationFrame = requestAnimationFrame(animationTick);
   }
+  updateControls();
 }
 
 function animationTick(timestamp: number): void {
@@ -1176,8 +1226,8 @@ function preferencesFromControls(): SessionPreferences {
   return {
     videoStandard: videoStandardSelect.value === 'ntsc' ? 'ntsc' : 'pal',
     sidModel: sidModelSelect.value === '8580' ? '8580' : '6581',
-    joystickCapture: joystickSelect.value === '1' || joystickSelect.value === '2'
-      ? joystickSelect.value
+    joystickCapture: inputModeSelect.value === 'joystick'
+      ? (joystickPortSelect.value === '1' ? '1' : '2')
       : 'keyboard'
   };
 }
@@ -1207,8 +1257,9 @@ async function rebuildMachineForPreferences(
 
   videoStandardSelect.value = preferences.videoStandard;
   sidModelSelect.value = preferences.sidModel;
-  joystickSelect.value = preferences.joystickCapture;
-  hostInput.setJoystickCapture(joystickCaptureFromValue(preferences.joystickCapture));
+  inputModeSelect.value = preferences.joystickCapture === 'keyboard' ? 'keyboard' : 'joystick';
+  joystickPortSelect.value = preferences.joystickCapture === '1' ? '1' : '2';
+  applyHostInputMode();
   powerDownUiState();
 
   const session = restoredSession ?? await browserSessionStore.loadSession();
@@ -1694,28 +1745,123 @@ function renderVicCanvas(): void {
 }
 
 function updateControls(): void {
-  powerOnButton.disabled = !machine.bus.roms.complete;
-  runToggleButton.disabled = !poweredOn;
-  resetButton.disabled = !poweredOn;
-  restoreButton.disabled = !poweredOn;
-  stepButton.disabled = !poweredOn || running;
-  run100Button.disabled = !poweredOn || running;
-  runFrameButton.disabled = !poweredOn || running;
-  loadPrgButton.disabled = !poweredOn || selectedPrg === null;
-  runPrgButton.disabled = !poweredOn || selectedPrg === null;
-  loadD64PrgButton.disabled = !poweredOn || mountedD64 === null || selectedD64Prg === null;
-  runD64PrgButton.disabled = !poweredOn || mountedD64 === null || selectedD64Prg === null;
-  loadT64PrgButton.disabled = !poweredOn || mountedT64 === null || selectedT64Prg === null;
-  runT64PrgButton.disabled = !poweredOn || mountedT64 === null || selectedT64Prg === null;
-  monitorApplyRegistersButton.disabled = !poweredOn || running;
-  monitorWriteMemoryButton.disabled = !poweredOn || running;
-  monitorContinueButton.disabled = !poweredOn || running;
-  monitorClearHistoryButton.disabled = !poweredOn;
-  quickSaveButton.disabled = !poweredOn || running;
-  exportStateButton.disabled = !poweredOn || running;
+  const missingRoms = (['basic', 'kernal', 'character'] as const)
+    .filter((kind) => !machine.bus.roms.isLoaded(kind))
+    .map((kind) => kind === 'basic' ? 'BASIC' : kind === 'kernal' ? 'KERNAL' : 'Character');
+  const powerReason = missingRoms.length > 0 ? `Load the ${missingRoms.join(', ')} ROM${missingRoms.length === 1 ? '' : 's'} first.` : null;
+  setButtonAvailability(powerOnButton, powerReason, poweredOn ? 'Cold power-cycle the C64 and execute the KERNAL reset vector again.' : 'Power on the C64 and execute the real KERNAL reset vector.');
+
+  const poweredReason = poweredOn ? null : 'Power on the C64 first.';
+  setButtonAvailability(runToggleButton, poweredReason, running ? 'Pause continuous execution.' : 'Resume continuous execution.');
+  setButtonAvailability(resetButton, poweredReason, 'Warm-reset the C64 while preserving RAM.');
+  setButtonAvailability(restoreButton, poweredReason, 'Pulse the physical RESTORE/NMI input.');
+
+  const pausedReason = !poweredOn ? 'Power on the C64 first.' : running ? 'Pause execution first.' : null;
+  setButtonAvailability(stepButton, pausedReason, 'Execute exactly one 6510 instruction.');
+  setButtonAvailability(run100Button, pausedReason, 'Execute up to 100 instructions or until a monitor stop.');
+  setButtonAvailability(runFrameButton, pausedReason, 'Execute until the VIC-II enters the next frame.');
+  setButtonAvailability(quickSaveButton, pausedReason, 'Save the current motherboard state into browser storage.');
+  setButtonAvailability(exportStateButton, pausedReason, 'Export the current motherboard state as a portable .c64state file.');
+
+  const quickLoadReason = !quickStateKnown
+    ? 'Browser storage is still being checked for a Quick Save.'
+    : quickStateAvailable ? null : 'No Quick Save is stored yet. Pause a powered-on machine and use Quick Save first.';
+  setButtonAvailability(quickLoadButton, quickLoadReason, 'Restore the most recent Quick Save from browser storage.');
+  clearSessionButton.title = 'Clear persisted ROMs, media, preferences, and Quick Save data. The currently running machine is not erased.';
+  importStateLabel.title = 'Import a portable .c64state file. Import can rebuild the machine profile if the saved PAL/NTSC standard differs.';
+
+  const prgReason = !poweredOn ? 'Power on the C64 first so a later Power On cannot erase the loaded RAM.'
+    : selectedPrg === null ? 'Choose a PRG file first.' : null;
+  setButtonAvailability(loadPrgButton, prgReason, 'Copy the selected PRG into C64 RAM without starting it.');
+  setButtonAvailability(runPrgButton, prgReason, 'Load the PRG, detect a BASIC bootstrap when present, then RUN it or start machine code.');
+
+  const d64Reason = !poweredOn ? 'Power on the C64 first so a later Power On cannot erase the host-loaded RAM.'
+    : mountedD64 === null ? 'Choose a D64 disk image first.'
+    : mountedD64.directoryError !== '' ? 'This D64 directory is not host-browsable. Use the mounted true-drive path instead.'
+    : selectedD64Prg === null ? 'Select a PRG entry from the mounted D64 first.' : null;
+  setButtonAvailability(loadD64PrgButton, d64Reason, 'Copy the selected D64 PRG into RAM without starting it. The disk remains mounted in drive 8.');
+  setButtonAvailability(runD64PrgButton, d64Reason, 'Load the selected D64 PRG and automatically RUN a detected BASIC bootstrap or start machine code.');
+
+  const t64Reason = !poweredOn ? 'Power on the C64 first so a later Power On cannot erase the host-loaded RAM.'
+    : mountedT64 === null ? 'Choose a T64 container first.'
+    : selectedT64Prg === null ? 'Select a loadable PRG entry from the T64 first.' : null;
+  setButtonAvailability(loadT64PrgButton, t64Reason, 'Copy the selected T64 PRG into RAM without starting it.');
+  setButtonAvailability(runT64PrgButton, t64Reason, 'Load the selected T64 PRG and automatically RUN a detected BASIC bootstrap or start machine code.');
+
+  const editReason = !poweredOn ? 'Power on the C64 first.' : running ? 'Pause execution before editing live CPU or RAM state.' : null;
+  setButtonAvailability(monitorApplyRegistersButton, editReason, 'Apply the edited CPU register values at an instruction boundary.');
+  setButtonAvailability(monitorWriteMemoryButton, editReason, 'Write one byte to physical C64 RAM.');
+  setButtonAvailability(monitorContinueButton, !poweredOn ? 'Power on the C64 first.' : running ? 'The machine is already running.' : null, 'Resume execution and arm configured monitor stops.');
+
+  const breakpointCount = machine.monitor.addressBreakpoints.length + machine.monitor.watchpoints.length + machine.monitor.rasterBreakpoints.length;
+  const removeReason = monitorRemoveIdInput.value.trim() === '' ? 'Enter a breakpoint/watchpoint ID to remove.'
+    : breakpointCount === 0 ? 'No breakpoints or watchpoints are configured.' : null;
+  setButtonAvailability(monitorRemoveBreakButton, removeReason, 'Remove the breakpoint/watchpoint whose ID is entered.');
+  setButtonAvailability(monitorClearBreaksButton, breakpointCount === 0 ? 'No breakpoints or watchpoints are configured.' : null, 'Remove all configured PC, watchpoint, and raster stops.');
+  monitorAddBreakButton.title = 'Add a PC breakpoint. Breakpoints may be configured before power-on.';
+  monitorAddWatchButton.title = 'Add a CPU read/write watchpoint. Watchpoints may be configured before power-on.';
+  monitorAddRasterButton.title = 'Add a VIC raster stop. Raster stops may be configured before power-on.';
+
+  const historyEmpty = machine.monitor.executionHistory.length === 0 && machine.monitor.busTrace.length === 0 && machine.monitor.interruptHistory.length === 0;
+  setButtonAvailability(monitorClearHistoryButton, !poweredOn ? 'Power on the C64 first.' : historyEmpty ? 'No execution, bus, or interrupt history has been recorded yet.' : null, 'Clear monitor execution, bus, and interrupt histories.');
+
+  audioEnableButton.title = sidAudio.active ? 'Resume Web Audio if the browser suspended it.' : 'Enable browser Web Audio for SID PCM output.';
+  setButtonAvailability(audioMuteButton, sidAudio.active ? null : 'Enable audio first.', sidAudio.isMuted ? 'Unmute SID audio output.' : 'Mute SID audio output.');
+  sidModelSelect.title = 'Select MOS 6581 or 8580 SID behavior. This setting can be changed while the machine is running.';
   videoStandardSelect.disabled = poweredOn;
+  videoStandardSelect.title = poweredOn ? 'Video standard is locked while powered on. Power down by changing/unloading a motherboard ROM, then select PAL or NTSC.' : 'Select PAL-B/MOS 6569 or NTSC-M/MOS 6567R8 before power-on.';
+
   runToggleButton.textContent = running ? 'Pause' : 'Run';
+  updateControlContext(machineControlHintElement, machineControlMessage(missingRoms), powerReason !== null || !poweredOn);
+  updateControlContext(sidControlHintElement, sidAudio.active
+    ? `${machine.bus.io.sid.model} audio is ${sidAudio.isMuted ? 'muted' : sidAudio.state}. Video standard cannot be changed while the C64 is powered on.`
+    : 'SID emulation is active even with browser audio off. Click Enable / Resume Audio to hear PCM output.', false);
+  updateControlContext(prgControlHintElement, prgControlMessage(prgReason), prgReason !== null);
+  updateControlContext(d64ControlHintElement, d64ControlMessage(d64Reason), d64Reason !== null);
+  updateControlContext(t64ControlHintElement, t64ControlMessage(t64Reason), t64Reason !== null);
+  updateControlContext(monitorControlHintElement, monitorControlMessage(), !poweredOn || running);
 }
+
+/** Apply one consistent disabled reason and enabled hint to every stateful button. */
+function setButtonAvailability(button: HTMLButtonElement, disabledReason: string | null, enabledHint: string): void {
+  button.disabled = disabledReason !== null;
+  button.title = disabledReason === null ? enabledHint : `Unavailable: ${disabledReason}`;
+}
+
+/** Keep the visible contextual clue synchronized with the button state. */
+function updateControlContext(element: HTMLElement, message: string, blocked: boolean): void {
+  element.textContent = message;
+  element.classList.toggle('blocked', blocked);
+}
+
+function machineControlMessage(missingRoms: readonly string[]): string {
+  if (missingRoms.length > 0) return `Power On requires all three motherboard ROMs. Missing: ${missingRoms.join(', ')}.`;
+  if (!poweredOn) return 'ROM set ready. Click Power On before loading programs into RAM or using execution/debug state controls.';
+  if (running) return `C64 is running. Pause to enable Step, Run 100, Run Frame, Quick Save, and Export State.${quickStateAvailable ? ' Quick Load is available.' : ''}`;
+  return `C64 is paused. Step/debug/save/export controls are available.${quickStateAvailable ? ' Quick Load is available.' : ' Create a Quick Save to enable Quick Load.'}`;
+}
+
+function prgControlMessage(reason: string | null): string {
+  if (reason !== null) return reason;
+  return 'PRG ready: Load Only copies bytes into RAM; Load + Run/Start detects a BASIC bootstrap and otherwise starts at the PRG load address.';
+}
+
+function d64ControlMessage(reason: string | null): string {
+  if (reason !== null) return reason;
+  return 'D64 PRG ready. Load Only copies it to RAM; Load + Run/Start chooses BASIC RUN vs machine-code start automatically. The same disk is mounted in drive 8; later IEC/device-8 access requires the 1541 DOS ROM.';
+}
+
+function t64ControlMessage(reason: string | null): string {
+  if (reason !== null) return reason;
+  return 'T64 PRG ready. Load Only copies it to RAM; Load + Run/Start chooses BASIC RUN vs machine-code start automatically.';
+}
+
+function monitorControlMessage(): string {
+  if (!poweredOn) return 'Breakpoints/watchpoints/raster stops can be configured now. Power on to inspect or edit live CPU/RAM state.';
+  if (running) return 'Monitor stops remain active while running. Pause execution before editing registers or RAM.';
+  return 'Machine paused: live register/RAM editing and Continue are available.';
+}
+
 
 function updatePrgStatus(): void {
   if (selectedPrg === null) {
@@ -1730,20 +1876,43 @@ function updatePrgStatus(): void {
 }
 
 function updateInputStatus(): void {
+  const joystickMode = inputModeSelect.value === 'joystick';
+  const port = joystickPortSelect.value === '1' ? 1 : 2;
+  joystickPortSelect.disabled = !joystickMode;
+  joystickPortSelect.title = joystickMode
+    ? `Arrow keys and Space are routed to joystick port ${port}.`
+    : 'Switch Input mode to Joystick to choose a control port.';
+
+  inputControlHintElement.textContent = joystickMode
+    ? `Joystick mode: Arrow keys = Up/Down/Left/Right · Space = Fire · routed to control port ${port}. Click the VIC-II display before playing.`
+    : 'C64 keyboard mode: normal keys, cursor keys, and Space go to the physical keyboard matrix. Choose Joystick for games that ask for control port 1 or 2.';
+
   if (!poweredOn) {
-    inputStatusElement.textContent = 'Power on to enable input';
+    inputStatusElement.textContent = joystickMode
+      ? `Joystick port ${port} selected · power on to enable input`
+      : 'C64 keyboard selected · power on to enable input';
     return;
   }
 
   if (document.activeElement !== vicCanvas) {
-    inputStatusElement.textContent = 'Click display to capture input';
+    inputStatusElement.textContent = joystickMode
+      ? `Joystick port ${port} selected · click display to capture`
+      : 'C64 keyboard selected · click display to capture';
     return;
   }
 
-  const port = joystickCaptureFromValue(joystickSelect.value);
-  inputStatusElement.textContent = port === null
-    ? 'Keyboard captured'
-    : `Joystick port ${port}: arrows + Space`;
+  inputStatusElement.textContent = joystickMode
+    ? `Joystick port ${port} captured · arrows = movement · Space = fire`
+    : 'C64 keyboard captured';
+}
+
+function applyHostInputMode(): void {
+  hostInput.setJoystickCapture(currentJoystickCapture());
+}
+
+function currentJoystickCapture(): JoystickCapturePort {
+  if (inputModeSelect.value !== 'joystick') return null;
+  return joystickPortSelect.value === '1' ? 1 : 2;
 }
 
 function setRomStatus(kind: C64RomKind, text: string, valid: boolean): void {
@@ -1773,12 +1942,6 @@ function graphicsModeName(mode: VicGraphicsMode): string {
     case VicGraphicsMode.EXTENDED_COLOR_TEXT: return 'ECM text';
     default: return `illegal (${mode})`;
   }
-}
-
-function joystickCaptureFromValue(value: string): JoystickCapturePort {
-  if (value === '1') return 1;
-  if (value === '2') return 2;
-  return null;
 }
 
 function iecLine(high: boolean): string {

@@ -130,7 +130,23 @@ describe('stable NMOS undocumented load/store and immediate opcodes', () => {
 });
 
 describe('unstable NMOS opcodes', () => {
-  it('decodes but refuses chip-dependent magic-constant execution', () => {
+
+
+  it('models C64 6510 LXA $AB with a configured $EE magic constant', () => {
+    const bus = new RamBus();
+    bus.load([0xab, 0x18], 0x8000);
+    bus.setVector(0xfffc, 0x8000);
+    const cpu = new Cpu6510(bus, { lxaMagic: 0xee });
+    cpu.reset();
+    cpu.a = 0x23;
+
+    expect(cpu.step()).toBe(2);
+    expect(cpu.a).toBe(0x08);
+    expect(cpu.x).toBe(0x08);
+    expect(cpu.getFlag(Flag.Zero)).toBe(false);
+    expect(cpu.getFlag(Flag.Negative)).toBe(false);
+  });
+  it('decodes but refuses unprofiled chip-dependent execution', () => {
     for (const opcode of [0x8b, 0xab, 0x93, 0x9f, 0x9b, 0x9c, 0x9e]) {
       const { cpu } = cpuWith([opcode, 0x00, 0x20]);
       expect(() => cpu.step(), `opcode $${opcode.toString(16)}`).toThrow(UnstableOpcodeError);
