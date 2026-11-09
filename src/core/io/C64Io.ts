@@ -2,6 +2,7 @@ import { Cia6526 } from '../cia/Cia6526';
 import { IecBus, type IecEndpoint } from '../iec/IecBus';
 import { KeyboardMatrix } from '../cia/KeyboardMatrix';
 import { Sid } from '../sid/Sid';
+import type { SidChipModel } from '../sid/SidModel';
 import { VicII, type VicMemory } from '../vic/VicII';
 import { PAL_6569_TIMING, type VicTimingProfile } from '../vic/VicTiming';
 import { ColorRam } from './ColorRam';
@@ -45,10 +46,11 @@ export class C64Io implements MemoryMappedDevice {
     vicMemory?: VicMemory,
     timing: VicTimingProfile = PAL_6569_TIMING,
     openBusValue: () => number = () => 0xff,
-    iecBus: IecBus = new IecBus()
+    iecBus: IecBus = new IecBus(),
+    sidModel: SidChipModel = '6581'
   ) {
     this.vic = new VicII(vicMemory, timing);
-    this.sid = new Sid('6581', timing.systemClockHz);
+    this.sid = new Sid(sidModel, timing.systemClockHz);
     this.colorRam = new ColorRam(openBusValue);
     this.io1 = new OpenBusDevice(openBusValue);
     this.io2 = new OpenBusDevice(openBusValue);

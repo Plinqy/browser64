@@ -14,6 +14,15 @@ export interface DatasetteSnapshot {
   readonly dataOffset: number;
 }
 
+export interface DatasetteState extends DatasetteSnapshot {
+  readonly tapeBytes: Uint8Array | null;
+  readonly cyclesUntilPulse: number;
+  readonly spinupCyclesRemaining: number;
+  readonly recordingPrefix: readonly number[];
+  readonly recordingData: readonly number[];
+  readonly recordingCycles: number;
+}
+
 /**
  * Commodore 1530/C2N signal-level playback and recording deck.
  *
@@ -212,6 +221,33 @@ export class Datasette {
       atEnd: this.endReached,
       dataOffset: this.dataOffsetValue
     };
+  }
+
+  saveState(): DatasetteState {
+    return {
+      ...this.snapshot(),
+      tapeBytes: this.tape?.toBytes() ?? null,
+      cyclesUntilPulse: this.cyclesUntilPulse,
+      spinupCyclesRemaining: this.spinupCyclesRemaining,
+      recordingPrefix: [...this.recordingPrefix],
+      recordingData: [...this.recordingData],
+      recordingCycles: this.recordingCycles
+    };
+  }
+
+  restoreState(state: DatasetteState): void {
+    this.tape = state.tapeBytes === null ? null : TapImage.parse(state.tapeBytes);
+    this.play = state.playPressed && this.tape !== null;
+    this.record = state.recordPressed && this.tape !== null && !state.writeProtected;
+    this.motor = state.motorOn; this.writeLineHigh = state.writeHigh;
+    this.writeProtectedValue = state.writeProtected; this.dirtyValue = state.dirty;
+    this.dataOffsetValue = Math.max(0, Math.trunc(state.dataOffset));
+    this.cyclesUntilPulse = Math.max(0, Math.trunc(state.cyclesUntilPulse));
+    this.spinupCyclesRemaining = Math.max(0, Math.trunc(state.spinupCyclesRemaining));
+    this.endReached = state.atEnd;
+    this.recordingPrefix = Array.from(state.recordingPrefix, (value) => value & 0xff);
+    this.recordingData = Array.from(state.recordingData, (value) => value & 0xff);
+    this.recordingCycles = Math.max(0, Math.trunc(state.recordingCycles));
   }
 
   private closeRecordedPulse(): void {

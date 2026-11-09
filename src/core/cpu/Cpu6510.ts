@@ -2,7 +2,7 @@ import type { Bus } from '../memory/Bus';
 import { word } from '../memory/Bus';
 import { Flag } from './Flags';
 import { getOpcodeInfo } from './opcodes';
-import type { AddressingMode, CpuSnapshot, Mnemonic, OpcodeInfo } from './types';
+import type { AddressingMode, CpuSnapshot, CpuState, Mnemonic, OpcodeInfo } from './types';
 
 export type CpuCycleKind = 'read' | 'write';
 
@@ -123,6 +123,39 @@ export class Cpu6510 {
       status: this.status,
       cycles: this.cycles
     };
+  }
+
+  saveState(): CpuState {
+    if (this.instructionInProgress) {
+      throw new Error('CPU state can only be saved at an instruction boundary.');
+    }
+    return {
+      ...this.snapshot(),
+      irqLine: this.irqLine,
+      nmiPending: this.nmiPending,
+      jammed: this.jammedValue,
+      jamAddress: this.jamAddress
+    };
+  }
+
+  restoreState(state: CpuState): void {
+    this.a = state.a & 0xff;
+    this.x = state.x & 0xff;
+    this.y = state.y & 0xff;
+    this.sp = state.sp & 0xff;
+    this.pc = state.pc & 0xffff;
+    this.status = (state.status | Flag.Unused) & 0xff;
+    this.cycles = Math.max(0, Math.trunc(state.cycles));
+    this.irqLine = state.irqLine;
+    this.nmiPending = state.nmiPending;
+    this.microOps = [];
+    this.instructionActive = false;
+    this.sequencePollsInterrupts = false;
+    this.interruptPollValid = false;
+    this.sampledIrq = false;
+    this.sampledNmi = false;
+    this.jammedValue = state.jammed;
+    this.jamAddress = state.jamAddress & 0xffff;
   }
 
   setIrqLine(asserted: boolean): void {

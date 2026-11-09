@@ -1,8 +1,33 @@
 import type { MemoryMappedDevice } from '../io/Device';
-import { SidFilter } from './SidFilter';
+import { SidFilter, type SidFilterState } from './SidFilter';
 import type { SidChipModel } from './SidModel';
 import { PAL_SID_CLOCK_HZ, SID_MODEL_CHARACTERISTICS } from './SidModel';
 import { SidVoice } from './SidVoice';
+import type { SidEnvelopeSnapshotState } from './SidEnvelope';
+import type { SidOscillatorState } from './SidOscillator';
+
+
+export interface SidState {
+  readonly model: SidChipModel;
+  readonly registers: Uint8Array;
+  readonly busValue: number;
+  readonly busTtl: number;
+  readonly pending8580Write: { readonly register: number; readonly value: number } | null;
+  readonly potX: number;
+  readonly potY: number;
+  readonly outputValue: number;
+  readonly voices: readonly [
+    { readonly oscillator: SidOscillatorState; readonly envelope: SidEnvelopeSnapshotState },
+    { readonly oscillator: SidOscillatorState; readonly envelope: SidEnvelopeSnapshotState },
+    { readonly oscillator: SidOscillatorState; readonly envelope: SidEnvelopeSnapshotState }
+  ];
+  readonly filter: SidFilterState;
+  readonly audioSampleRate: number;
+  readonly audioPhase: number;
+  readonly audioAccumulator: number;
+  readonly audioAccumulatorCycles: number;
+  readonly audioQueue: readonly number[];
+}
 
 export interface SidSnapshot {
   readonly model: SidChipModel;
@@ -162,6 +187,47 @@ export class Sid implements MemoryMappedDevice {
       filterCutoffHz: this.filter.cutoffHz,
       output: this.outputValue
     };
+  }
+
+  saveState(): SidState {
+    return {
+      model: this.modelValue,
+      registers: this.registers.slice(),
+      busValue: this.busValue,
+      busTtl: this.busTtl,
+      pending8580Write: this.pending8580Write === null ? null : { ...this.pending8580Write },
+      potX: this.potX, potY: this.potY, outputValue: this.outputValue,
+      voices: [
+        { oscillator: this.voices[0].oscillator.saveState(), envelope: this.voices[0].envelope.saveState() },
+        { oscillator: this.voices[1].oscillator.saveState(), envelope: this.voices[1].envelope.saveState() },
+        { oscillator: this.voices[2].oscillator.saveState(), envelope: this.voices[2].envelope.saveState() }
+      ],
+      filter: this.filter.saveState(),
+      audioSampleRate: this.audioSampleRate, audioPhase: this.audioPhase,
+      audioAccumulator: this.audioAccumulator, audioAccumulatorCycles: this.audioAccumulatorCycles,
+      audioQueue: [...this.audioQueue]
+    };
+  }
+
+  restoreState(state: SidState): void {
+    this.setModel(state.model);
+    this.registers.set(state.registers.subarray(0, this.registers.length));
+    this.busValue = state.busValue & 0xff; this.busTtl = Math.max(0, Math.trunc(state.busTtl));
+    this.pending8580Write = state.pending8580Write === null ? null : {
+      register: state.pending8580Write.register & 0x1f, value: state.pending8580Write.value & 0xff
+    };
+    this.potX = state.potX & 0xff; this.potY = state.potY & 0xff; this.outputValue = state.outputValue;
+    for (let i = 0; i < this.voices.length; i += 1) {
+      const voiceState = state.voices[i];
+      if (voiceState === undefined) continue;
+      this.voices[i]!.oscillator.restoreState(voiceState.oscillator);
+      this.voices[i]!.envelope.restoreState(voiceState.envelope);
+    }
+    this.filter.restoreState(state.filter);
+    this.audioSampleRate = Math.max(0, state.audioSampleRate);
+    this.audioPhase = state.audioPhase; this.audioAccumulator = state.audioAccumulator;
+    this.audioAccumulatorCycles = Math.max(0, Math.trunc(state.audioAccumulatorCycles));
+    this.audioQueue = Array.from(state.audioQueue);
   }
 
   get model(): SidChipModel { return this.modelValue; }

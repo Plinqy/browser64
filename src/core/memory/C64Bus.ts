@@ -1,8 +1,13 @@
 import { ExpansionPort, type CartridgeDevice, type CartridgeMode } from '../cartridge/Cartridge';
+import type { Cia6526State } from '../cia/Cia6526';
 import { IecBus } from '../iec/IecBus';
 import { C64Io } from '../io/C64Io';
 import { C64Roms } from '../rom/RomSet';
 import { Datasette } from '../tape/Datasette';
+import type { SidState } from '../sid/Sid';
+import type { SidChipModel } from '../sid/SidModel';
+import type { DatasetteState } from '../tape/Datasette';
+import type { VicIIState } from '../vic/VicII';
 import { PAL_6569_TIMING, type VicTimingProfile } from '../vic/VicTiming';
 import type { Bus } from './Bus';
 
@@ -17,6 +22,24 @@ export interface C64BusAccess {
 }
 
 export type C64BusAccessObserver = (access: C64BusAccess) => void;
+
+
+export interface C64BusState {
+  readonly ram: Uint8Array;
+  readonly colorRam: Uint8Array;
+  readonly dataDirection: number;
+  readonly dataLatch: number;
+  readonly dataBusLatch: number;
+  readonly inputPins: number;
+  readonly joystick1Pins: number;
+  readonly joystick2Pins: number;
+  readonly cia1: Cia6526State;
+  readonly cia2: Cia6526State;
+  readonly vic: VicIIState;
+  readonly sid: SidState;
+  readonly datasette: DatasetteState;
+  readonly cartridgeState: unknown;
+}
 
 export interface C64MemoryConfiguration {
   port: number;
@@ -58,11 +81,14 @@ export class C64Bus implements Bus {
   // Datasette SENSE input and is pulled low by the deck while PLAY is engaged.
   private inputPins = 0x17;
 
-  constructor(public readonly timing: VicTimingProfile = PAL_6569_TIMING) {
+  constructor(
+    public readonly timing: VicTimingProfile = PAL_6569_TIMING,
+    sidModel: SidChipModel = '6581'
+  ) {
     this.io = new C64Io({
       read: (address) => this.readVicMemory(address),
       readColor: (index) => this.readVicColor(index)
-    }, timing, () => this.dataBusLatch, this.iec);
+    }, timing, () => this.dataBusLatch, this.iec, sidModel);
     this.datasette = new Datasette(timing.systemClockHz, () => {
       // CIA1 FLAG is negative-edge triggered. A C64 TAP v0/v1 pulse is one
       // complete wave, so deliver one falling edge and immediately release it.
@@ -158,6 +184,44 @@ export class C64Bus implements Bus {
 
   setAccessObserver(observer: C64BusAccessObserver | null): void {
     this.accessObserver = observer;
+  }
+
+  saveState(): C64BusState {
+    return {
+      ram: this.ram.slice(),
+      colorRam: this.io.colorRam.memory.slice(),
+      dataDirection: this.dataDirection,
+      dataLatch: this.dataLatch,
+      dataBusLatch: this.dataBusLatch,
+      inputPins: this.inputPins,
+      joystick1Pins: this.io.joystick1InputPins,
+      joystick2Pins: this.io.joystick2InputPins,
+      cia1: this.io.cia1.saveState(),
+      cia2: this.io.cia2.saveState(),
+      vic: this.io.vic.saveState(),
+      sid: this.io.sid.saveState(),
+      datasette: this.datasette.saveState(),
+      cartridgeState: this.expansion.cartridge?.saveState?.() ?? null
+    };
+  }
+
+  restoreState(state: C64BusState): void {
+    if (state.ram.length !== this.ram.length) throw new Error('Invalid C64 RAM snapshot length.');
+    if (state.colorRam.length !== this.io.colorRam.memory.length) throw new Error('Invalid color RAM snapshot length.');
+    this.ram.set(state.ram);
+    this.io.colorRam.memory.set(state.colorRam);
+    this.dataDirection = state.dataDirection & 0xff;
+    this.dataLatch = state.dataLatch & 0xff;
+    this.dataBusLatch = state.dataBusLatch & 0xff;
+    this.inputPins = state.inputPins & 0xff;
+    this.io.cia1.restoreState(state.cia1);
+    this.io.cia2.restoreState(state.cia2);
+    this.io.vic.restoreState(state.vic);
+    this.io.sid.restoreState(state.sid);
+    this.io.setJoystick1Pins(state.joystick1Pins);
+    this.io.setJoystick2Pins(state.joystick2Pins);
+    this.datasette.restoreState(state.datasette);
+    this.expansion.cartridge?.restoreState?.(state.cartridgeState);
   }
 
   attachCartridge(cartridge: CartridgeDevice): void {

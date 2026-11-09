@@ -14,6 +14,50 @@ type PortOutputChangeHandler = () => void;
 const REGISTER_MASK = 0x0f;
 const INTERRUPT_MASK = 0x1f;
 
+export interface Cia6526State {
+  readonly pra: number;
+  readonly prb: number;
+  readonly ddra: number;
+  readonly ddrb: number;
+  readonly timerALatch: number;
+  readonly timerBLatch: number;
+  readonly timerA: number;
+  readonly timerB: number;
+  readonly tod: Uint8Array;
+  readonly alarm: Uint8Array;
+  readonly todReadLatch: Uint8Array;
+  readonly todLatched: boolean;
+  readonly todRunning: boolean;
+  readonly todInputDivider: number;
+  readonly sdr: number;
+  readonly serialShift: number;
+  readonly serialBits: number;
+  readonly interruptMask: number;
+  readonly interruptFlags: number;
+  readonly irq: boolean;
+  readonly cra: number;
+  readonly crb: number;
+  readonly timerAOutput: boolean;
+  readonly timerBOutput: boolean;
+  readonly timerAPulse: boolean;
+  readonly timerBPulse: boolean;
+  readonly timerACount2: boolean;
+  readonly timerACount3: boolean;
+  readonly timerBCount2: boolean;
+  readonly timerBCount3: boolean;
+  readonly timerALoad1: boolean;
+  readonly timerBLoad1: boolean;
+  readonly timerAForceLoad: boolean;
+  readonly timerBForceLoad: boolean;
+  readonly timerAOneShot0: boolean;
+  readonly timerBOneShot0: boolean;
+  readonly irqPending: boolean;
+  readonly cntRisePending: boolean;
+  readonly cntHigh: boolean;
+  readonly spHigh: boolean;
+  readonly flagHigh: boolean;
+}
+
 /**
  * Functional MOS 6526 Complex Interface Adapter.
  *
@@ -254,6 +298,54 @@ export class Cia6526 implements MemoryMappedDevice {
     this.cntHigh = true;
     this.spHigh = true;
     this.flagHigh = true;
+    this.portAOutputChange();
+  }
+
+  saveState(): Cia6526State {
+    return {
+      pra: this.pra, prb: this.prb, ddra: this.ddra, ddrb: this.ddrb,
+      timerALatch: this.timerALatch, timerBLatch: this.timerBLatch,
+      timerA: this.timerA, timerB: this.timerB,
+      tod: this.tod.slice(), alarm: this.alarm.slice(), todReadLatch: this.todReadLatch.slice(),
+      todLatched: this.todLatched, todRunning: this.todRunning, todInputDivider: this.todInputDivider,
+      sdr: this.sdr, serialShift: this.serialShift, serialBits: this.serialBits,
+      interruptMask: this.interruptMask, interruptFlags: this.interruptFlags, irq: this.irq,
+      cra: this.cra, crb: this.crb,
+      timerAOutput: this.timerAOutput, timerBOutput: this.timerBOutput,
+      timerAPulse: this.timerAPulse, timerBPulse: this.timerBPulse,
+      timerACount2: this.timerACount2, timerACount3: this.timerACount3,
+      timerBCount2: this.timerBCount2, timerBCount3: this.timerBCount3,
+      timerALoad1: this.timerALoad1, timerBLoad1: this.timerBLoad1,
+      timerAForceLoad: this.timerAForceLoad, timerBForceLoad: this.timerBForceLoad,
+      timerAOneShot0: this.timerAOneShot0, timerBOneShot0: this.timerBOneShot0,
+      irqPending: this.irqPending, cntRisePending: this.cntRisePending,
+      cntHigh: this.cntHigh, spHigh: this.spHigh, flagHigh: this.flagHigh
+    };
+  }
+
+  restoreState(state: Cia6526State): void {
+    this.pra = state.pra & 0xff; this.prb = state.prb & 0xff;
+    this.ddra = state.ddra & 0xff; this.ddrb = state.ddrb & 0xff;
+    this.timerALatch = state.timerALatch & 0xffff; this.timerBLatch = state.timerBLatch & 0xffff;
+    this.timerA = state.timerA & 0xffff; this.timerB = state.timerB & 0xffff;
+    this.tod.set(state.tod.subarray(0, 4)); this.alarm.set(state.alarm.subarray(0, 4));
+    this.todReadLatch.set(state.todReadLatch.subarray(0, 4));
+    this.todLatched = state.todLatched; this.todRunning = state.todRunning;
+    this.todInputDivider = Math.max(0, Math.trunc(state.todInputDivider));
+    this.sdr = state.sdr & 0xff; this.serialShift = state.serialShift & 0xff;
+    this.serialBits = Math.max(0, Math.trunc(state.serialBits));
+    this.interruptMask = state.interruptMask & INTERRUPT_MASK;
+    this.interruptFlags = state.interruptFlags & INTERRUPT_MASK; this.irq = state.irq;
+    this.cra = state.cra & 0xef; this.crb = state.crb & 0xef;
+    this.timerAOutput = state.timerAOutput; this.timerBOutput = state.timerBOutput;
+    this.timerAPulse = state.timerAPulse; this.timerBPulse = state.timerBPulse;
+    this.timerACount2 = state.timerACount2; this.timerACount3 = state.timerACount3;
+    this.timerBCount2 = state.timerBCount2; this.timerBCount3 = state.timerBCount3;
+    this.timerALoad1 = state.timerALoad1; this.timerBLoad1 = state.timerBLoad1;
+    this.timerAForceLoad = state.timerAForceLoad; this.timerBForceLoad = state.timerBForceLoad;
+    this.timerAOneShot0 = state.timerAOneShot0; this.timerBOneShot0 = state.timerBOneShot0;
+    this.irqPending = state.irqPending; this.cntRisePending = state.cntRisePending;
+    this.cntHigh = state.cntHigh; this.spHigh = state.spHigh; this.flagHigh = state.flagHigh;
     this.portAOutputChange();
   }
 

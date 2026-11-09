@@ -9,6 +9,37 @@ export interface VicMemory {
   readColor(index: number): number;
 }
 
+
+export interface VicIIState {
+  readonly registers: Uint8Array;
+  readonly framebuffer: Uint8Array;
+  readonly graphicsOpaque: Uint8Array;
+  readonly videoMatrix: Uint8Array;
+  readonly colorMatrix: Uint8Array;
+  readonly lineVideoMatrix: Uint8Array;
+  readonly lineColorMatrix: Uint8Array;
+  readonly spriteLineData: readonly Uint8Array[];
+  readonly spriteLineActive: Uint8Array;
+  readonly spriteLineRows: Uint8Array;
+  readonly rasterLine: number;
+  readonly cycleInLine: number;
+  readonly rasterCompare: number;
+  readonly interruptStatus: number;
+  readonly interruptMask: number;
+  readonly frameCounter: number;
+  readonly badLineEnableLatch: boolean;
+  readonly cAccessCounter: number;
+  readonly gAccessCounter: number;
+  readonly spriteDataAccessCounter: number;
+  readonly vc: number;
+  readonly vcBase: number;
+  readonly rc: number;
+  readonly vmli: number;
+  readonly displayState: boolean;
+  readonly spriteSpriteCollision: number;
+  readonly spriteBackgroundCollision: number;
+}
+
 export enum VicGraphicsMode {
   STANDARD_TEXT = 0,
   MULTICOLOR_TEXT = 1,
@@ -206,6 +237,72 @@ export class VicII implements MemoryMappedDevice {
     for (const data of this.spriteLineData) data.fill(0);
     this.framebuffer.fill(0);
     this.graphicsOpaque.fill(0);
+  }
+
+  saveState(): VicIIState {
+    return {
+      registers: this.registers.slice(),
+      framebuffer: this.framebuffer.slice(),
+      graphicsOpaque: this.graphicsOpaque.slice(),
+      videoMatrix: this.videoMatrix.slice(),
+      colorMatrix: this.colorMatrix.slice(),
+      lineVideoMatrix: this.lineVideoMatrix.slice(),
+      lineColorMatrix: this.lineColorMatrix.slice(),
+      spriteLineData: this.spriteLineData.map((data) => data.slice()),
+      spriteLineActive: this.spriteLineActive.slice(),
+      spriteLineRows: this.spriteLineRows.slice(),
+      rasterLine: this.rasterLineValue,
+      cycleInLine: this.cycleInLineValue,
+      rasterCompare: this.rasterCompareValue,
+      interruptStatus: this.interruptStatus,
+      interruptMask: this.interruptMask,
+      frameCounter: this.frameCounter,
+      badLineEnableLatch: this.badLineEnableLatch,
+      cAccessCounter: this.cAccessCounter,
+      gAccessCounter: this.gAccessCounter,
+      spriteDataAccessCounter: this.spriteDataAccessCounter,
+      vc: this.vcValue,
+      vcBase: this.vcBaseValue,
+      rc: this.rcValue,
+      vmli: this.vmliValue,
+      displayState: this.displayStateValue,
+      spriteSpriteCollision: this.spriteSpriteCollision,
+      spriteBackgroundCollision: this.spriteBackgroundCollision
+    };
+  }
+
+  restoreState(state: VicIIState): void {
+    this.registers.set(state.registers.subarray(0, this.registers.length));
+    this.framebuffer.set(state.framebuffer.subarray(0, this.framebuffer.length));
+    this.graphicsOpaque.set(state.graphicsOpaque.subarray(0, this.graphicsOpaque.length));
+    this.videoMatrix.set(state.videoMatrix.subarray(0, this.videoMatrix.length));
+    this.colorMatrix.set(state.colorMatrix.subarray(0, this.colorMatrix.length));
+    this.lineVideoMatrix.set(state.lineVideoMatrix.subarray(0, this.lineVideoMatrix.length));
+    this.lineColorMatrix.set(state.lineColorMatrix.subarray(0, this.lineColorMatrix.length));
+    for (let i = 0; i < this.spriteLineData.length; i += 1) {
+      const source = state.spriteLineData[i];
+      this.spriteLineData[i]!.fill(0);
+      if (source !== undefined) this.spriteLineData[i]!.set(source.subarray(0, 3));
+    }
+    this.spriteLineActive.set(state.spriteLineActive.subarray(0, this.spriteLineActive.length));
+    this.spriteLineRows.set(state.spriteLineRows.subarray(0, this.spriteLineRows.length));
+    this.rasterLineValue = mod(state.rasterLine, this.timing.linesPerFrame);
+    this.cycleInLineValue = mod(state.cycleInLine, this.timing.cyclesPerLine);
+    this.rasterCompareValue = state.rasterCompare & 0x01ff;
+    this.interruptStatus = state.interruptStatus & 0x0f;
+    this.interruptMask = state.interruptMask & 0x0f;
+    this.frameCounter = Math.max(0, Math.trunc(state.frameCounter));
+    this.badLineEnableLatch = state.badLineEnableLatch;
+    this.cAccessCounter = Math.max(0, Math.trunc(state.cAccessCounter));
+    this.gAccessCounter = Math.max(0, Math.trunc(state.gAccessCounter));
+    this.spriteDataAccessCounter = Math.max(0, Math.trunc(state.spriteDataAccessCounter));
+    this.vcValue = state.vc & 0x03ff;
+    this.vcBaseValue = state.vcBase & 0x03ff;
+    this.rcValue = state.rc & 0x07;
+    this.vmliValue = state.vmli & 0x3f;
+    this.displayStateValue = state.displayState;
+    this.spriteSpriteCollision = state.spriteSpriteCollision & 0xff;
+    this.spriteBackgroundCollision = state.spriteBackgroundCollision & 0xff;
   }
 
   /** Advance VIC raster time by complete C64 system/PHI2 cycles. */
@@ -911,4 +1008,9 @@ export class VicII implements MemoryMappedDevice {
     }
     return cycle >= start || cycle <= end;
   }
+}
+
+function mod(value: number, divisor: number): number {
+  const integer = Math.trunc(value);
+  return ((integer % divisor) + divisor) % divisor;
 }

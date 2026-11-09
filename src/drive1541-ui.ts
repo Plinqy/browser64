@@ -1,5 +1,6 @@
 import { C1541_ROM_SIZE } from './core';
-import { machine } from './main';
+import { machine, sessionReady } from './main';
+import { browserSessionStore } from './session/BrowserSession';
 
 const diskPanel = document.querySelector<HTMLElement>('.disk-panel');
 if (diskPanel === null) throw new Error('Missing D64 disk panel for 1541 controls.');
@@ -50,6 +51,7 @@ romInput.addEventListener('change', async () => {
   try {
     const bytes = new Uint8Array(await file.arrayBuffer());
     machine.load1541Rom(bytes);
+    await browserSessionStore.putAsset('rom-1541', { name: file.name, bytes, mediaType: 'rom' });
     status.textContent = `${file.name} · ${bytes.length} bytes`;
     status.classList.add('ready');
     status.title = bytes.length === C1541_ROM_SIZE ? '1541 DOS ROM ready' : '';
@@ -72,7 +74,11 @@ d64Input.addEventListener('change', async () => {
   }
 
   try {
-    machine.mountD64In1541(new Uint8Array(await file.arrayBuffer()), writeProtect.checked);
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    machine.mountD64In1541(bytes, writeProtect.checked);
+    await browserSessionStore.putAsset('disk-1541', {
+      name: file.name, bytes, mediaType: 'd64', writeProtected: writeProtect.checked
+    });
     mountedFilename = file.name;
     g64Input.value = '';
   } catch {
@@ -85,7 +91,11 @@ g64Input.addEventListener('change', async () => {
   const file = g64Input.files?.[0];
   if (file === undefined) return;
   try {
-    machine.mountG64In1541(new Uint8Array(await file.arrayBuffer()), writeProtect.checked);
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    machine.mountG64In1541(bytes, writeProtect.checked);
+    await browserSessionStore.putAsset('disk-1541', {
+      name: file.name, bytes, mediaType: 'g64', writeProtected: writeProtect.checked
+    });
     mountedFilename = file.name;
     renderDriveStatus();
   } catch (error) {
@@ -96,6 +106,7 @@ g64Input.addEventListener('change', async () => {
 
 writeProtect.addEventListener('change', () => {
   machine.set1541WriteProtected(writeProtect.checked);
+  void persistMountedDisk();
   renderDriveStatus();
 });
 
@@ -107,6 +118,34 @@ exportButton.addEventListener('click', () => {
     ? mountedFilename.slice(0, -suffix.length)
     : mountedFilename;
   downloadBytes(exported.bytes, `${base}-modified${suffix}`);
+  void browserSessionStore.putAsset('disk-1541', {
+    name: mountedFilename, bytes: exported.bytes, mediaType: exported.kind, writeProtected: writeProtect.checked
+  });
+});
+
+async function persistMountedDisk(): Promise<void> {
+  const exported = machine.export1541Media();
+  if (exported === null) return;
+  await browserSessionStore.putAsset('disk-1541', {
+    name: mountedFilename,
+    bytes: exported.bytes,
+    mediaType: exported.kind,
+    writeProtected: writeProtect.checked
+  });
+}
+
+void sessionReady.then((session) => {
+  const driveRom = session.assets['rom-1541'];
+  if (driveRom !== undefined) {
+    status.textContent = `${driveRom.name} · ${driveRom.bytes.length} bytes · restored`;
+    status.classList.add('ready');
+  }
+  const disk = session.assets['disk-1541'];
+  if (disk !== undefined) {
+    mountedFilename = disk.name;
+    writeProtect.checked = disk.writeProtected ?? false;
+  }
+  renderDriveStatus();
 });
 
 function renderDriveStatus(): void {

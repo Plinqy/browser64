@@ -137,3 +137,10 @@ npm run test
 ```
 
 With the optional Klaus binary absent, local Vitest is expected to report 184 passed and 1 skipped.
+
+
+## v0.16 user-facing completeness verification
+
+The v0.16 milestone adds portable save states, browser-persistent session assets, configurable PAL/NTSC construction, and persisted 6581/8580 selection. Save states are deliberately captured only at a C64 6510 instruction boundary. Motherboard state is serialized deeply; independent 1541 CPU/VIA microstate is not fabricated and is reset during restore while mounted media/head position remain attached.
+
+Verification performed for this patch includes strict TypeScript compilation of the complete core, session codec/store, browser main UI, 1541 UI, expansion/tape UI, input adapter, and audio adapter using only a verification-only Vite URL declaration; strict compilation of all ordinary tests except the optional Klaus Node-file harness using verification-only Vitest declarations; and an independent compiled runtime harness covering NTSC+8580 construction, deep motherboard state restore, portable binary-state encoding, and cross-standard state rejection.

@@ -1,5 +1,6 @@
 import type { RawCartridgeMode } from './core';
-import { machine } from './main';
+import { machine, sessionReady } from './main';
+import { browserSessionStore } from './session/BrowserSession';
 
 const anchor = document.querySelector<HTMLElement>('.drive1541-panel') ?? document.querySelector<HTMLElement>('.disk-panel');
 if (anchor === null) throw new Error('Missing storage panel for expansion controls.');
@@ -74,7 +75,9 @@ crtInput.addEventListener('change', async () => {
   const file = crtInput.files?.[0];
   if (file === undefined) return;
   try {
-    const crt = machine.mountCrt(new Uint8Array(await file.arrayBuffer()));
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    const crt = machine.mountCrt(bytes);
+    await browserSessionStore.putAsset('cartridge', { name: file.name, bytes, mediaType: 'crt' });
     expansionStatus.textContent = `${crt.name || file.name} · HW ${crt.hardwareType} · ${machine.bus.configuration.cartridgeMode}`;
     expansionStatus.classList.add('ready');
   } catch (error) {
@@ -86,11 +89,12 @@ rawInput.addEventListener('change', async () => {
   const file = rawInput.files?.[0];
   if (file === undefined) return;
   try {
-    machine.mountRawCartridge(
-      new Uint8Array(await file.arrayBuffer()),
-      rawMode.value as RawCartridgeMode,
-      file.name
-    );
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    const mode = rawMode.value as RawCartridgeMode;
+    machine.mountRawCartridge(bytes, mode, file.name);
+    await browserSessionStore.putAsset('cartridge', {
+      name: file.name, bytes, mediaType: 'raw', rawCartridgeMode: mode
+    });
     expansionStatus.textContent = `${file.name} · ${machine.bus.configuration.cartridgeMode}`;
     expansionStatus.classList.add('ready');
   } catch (error) {
@@ -101,6 +105,7 @@ rawInput.addEventListener('change', async () => {
 button('freeze-cart').addEventListener('click', () => machine.pressCartridgeFreeze());
 button('eject-cart').addEventListener('click', () => {
   machine.ejectCartridge();
+  void browserSessionStore.removeAsset('cartridge');
   crtInput.value = '';
   rawInput.value = '';
   expansionStatus.textContent = 'No cartridge';
@@ -111,7 +116,11 @@ tapeInput.addEventListener('change', async () => {
   const file = tapeInput.files?.[0];
   if (file === undefined) return;
   try {
-    const tap = machine.mountTap(new Uint8Array(await file.arrayBuffer()), tapeWriteProtect.checked);
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    const tap = machine.mountTap(bytes, tapeWriteProtect.checked);
+    await browserSessionStore.putAsset('tape', {
+      name: file.name, bytes, mediaType: 'tap', writeProtected: tapeWriteProtect.checked
+    });
     tapeFilename = file.name;
     tapeStatus.textContent = `${file.name} · TAP v${tap.version} · ${tap.byteLength} bytes`;
     tapeStatus.classList.add('ready');
@@ -122,6 +131,10 @@ tapeInput.addEventListener('change', async () => {
 
 button('tape-new').addEventListener('click', () => {
   machine.newBlankTape();
+  const bytes = machine.exportTape();
+  if (bytes !== null) void browserSessionStore.putAsset('tape', {
+    name: 'recording.tap', bytes, mediaType: 'tap', writeProtected: false
+  });
   tapeFilename = 'recording.tap';
   tapeInput.value = '';
   tapeWriteProtect.checked = false;
@@ -135,21 +148,52 @@ button('tape-record').addEventListener('click', () => {
     showError(tapeStatus, error);
   }
 });
-button('tape-stop').addEventListener('click', () => machine.stopTape());
+button('tape-stop').addEventListener('click', () => {
+  machine.stopTape();
+  void persistTape();
+});
 button('tape-rewind').addEventListener('click', () => machine.rewindTape());
 tapeWriteProtect.addEventListener('change', () => {
   machine.setTapeWriteProtected(tapeWriteProtect.checked);
+  void persistTape();
   renderTapeStatus();
 });
 tapeSave.addEventListener('click', () => {
   const bytes = machine.exportTape();
   if (bytes === null) return;
   downloadBytes(bytes, modifiedTapeName(tapeFilename));
+  void persistTape();
 });
 button('tape-eject').addEventListener('click', () => {
   machine.ejectTape();
+  void browserSessionStore.removeAsset('tape');
   tapeInput.value = '';
   tapeFilename = 'recording.tap';
+  renderTapeStatus();
+});
+
+async function persistTape(): Promise<void> {
+  const bytes = machine.exportTape();
+  if (bytes === null) return;
+  await browserSessionStore.putAsset('tape', {
+    name: tapeFilename, bytes, mediaType: 'tap', writeProtected: tapeWriteProtect.checked
+  });
+}
+
+void sessionReady.then((session) => {
+  const cartridge = session.assets.cartridge;
+  if (cartridge !== undefined) {
+    expansionStatus.textContent = `${cartridge.name} · restored · ${machine.bus.configuration.cartridgeMode}`;
+    expansionStatus.classList.add('ready');
+    if (cartridge.mediaType === 'raw' && cartridge.rawCartridgeMode !== undefined) {
+      rawMode.value = cartridge.rawCartridgeMode;
+    }
+  }
+  const tape = session.assets.tape;
+  if (tape !== undefined) {
+    tapeFilename = tape.name;
+    tapeWriteProtect.checked = tape.writeProtected ?? false;
+  }
   renderTapeStatus();
 });
 

@@ -234,11 +234,11 @@ The Klaus Dormann functional test remains optional. If you possess the 64 KiB `6
 tests/assets/6502_functional_test.bin
 ```
 
-## v0.15 Architecture
+## v0.16 Architecture
 
 ```text
-Browser adapters
- ROM / PRG / D64   keyboard / joystick / RESTORE   frame pacing
+Browser adapters + persistent session
+ ROM / PRG / disk   keyboard / joystick / RESTORE   save state / frame pacing
      \             |                            /
       \            |                           /
        +-------------+--------------------------+
@@ -295,21 +295,22 @@ The host-only input adapter is separately documented in `src/input/README.md`.
 
 ## Roadmap
 
-### v0.15 — Peripheral completeness
+### v0.16 — User-facing completeness
 
-- writable D64 sector images with GCR write-back and export
-- G64 v0 raw-GCR media with half-tracks and per-byte speed zones
-- 1541 VIA1 write-data/BYTE READY/SOE path
-- Ocean, C64GS/System 3, Dinamic, and Magic Desk CRT banking
-- expansion IRQ/NMI/DMA/FREEZE device hooks
-- cycle-timed C64 TAP v1 recording, blank media, write protection, and export
+- instruction-boundary C64 motherboard save states with portable `.c64state` export/import
+- quick-save/quick-load persisted in IndexedDB
+- automatic browser-session restoration for motherboard ROMs, 1541 ROM, PRG, disk, cartridge, and tape attachments
+- PAL-B/MOS 6569 and NTSC-M/MOS 6567R8 machine profiles
+- independent MOS 6581 / MOS 8580 SID selection persisted with the session
+- restored VIC raster/sequencer/framebuffer, CIA pipeline/TOD/IRQ, SID oscillator/envelope/filter, Datasette, RAM/color RAM, CPU, processor-port, and cartridge-bank state
+- 1541 electronics deliberately reset on save-state restore because the drive CPU can be mid-microcycle when the C64 is at an instruction boundary; mounted media/head position are preserved
 
-### Later
+### Later / v1.0 hardening
 
 - deeper CPU/VIC half-cycle edge-case accuracy and broader VICE compatibility suites
 - additional copy-protection/PLL behavior and fast-loader compatibility hardening
 - concrete freezer cartridge families and additional banked cartridge hardware
-- save states, browser persistence, profiling, and compatibility/performance hardening
+- performance profiling, AudioWorklet stabilization, regression expansion, packaging, and release documentation
 
 ## Design Rules
 

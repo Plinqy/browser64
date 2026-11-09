@@ -26,6 +26,29 @@ const RATE_LFSR_MATCH = Object.freeze([
  * are pipelined, which preserves the delay and $00/$FF boundary behaviors that
  * are visible through ENV3.
  */
+
+export interface SidEnvelopeSnapshotState {
+  readonly attack: number;
+  readonly decay: number;
+  readonly sustainLevel: number;
+  readonly release: number;
+  readonly gate: boolean;
+  readonly rateLfsr: number;
+  readonly activeRateMatch: number;
+  readonly rateResetPending: boolean;
+  readonly exponentialCounter: number;
+  readonly exponentialPeriod: number;
+  readonly deferredExponentialPeriod: number;
+  readonly envelopeStepPipeline: number;
+  readonly exponentialPipeline: number;
+  readonly counterEnabled: boolean;
+  readonly envelopeCounter: number;
+  readonly envReadLatch: number;
+  readonly state: SidEnvelopeState;
+  readonly nextState: SidEnvelopeState;
+  readonly statePipeline: number;
+}
+
 export class SidEnvelope {
   private attack = 0;
   private decay = 0;
@@ -82,6 +105,31 @@ export class SidEnvelope {
 
   setModel(model: SidChipModel): void {
     this.model = model;
+  }
+
+  saveState(): SidEnvelopeSnapshotState {
+    return {
+      attack: this.attack, decay: this.decay, sustainLevel: this.sustainLevel, release: this.release, gate: this.gate,
+      rateLfsr: this.rateLfsr, activeRateMatch: this.activeRateMatch, rateResetPending: this.rateResetPending,
+      exponentialCounter: this.exponentialCounter, exponentialPeriod: this.exponentialPeriod,
+      deferredExponentialPeriod: this.deferredExponentialPeriod, envelopeStepPipeline: this.envelopeStepPipeline,
+      exponentialPipeline: this.exponentialPipeline, counterEnabled: this.counterEnabled,
+      envelopeCounter: this.envelopeCounter, envReadLatch: this.envReadLatch,
+      state: this.stateValue, nextState: this.nextState, statePipeline: this.statePipeline
+    };
+  }
+
+  restoreState(state: SidEnvelopeSnapshotState): void {
+    this.attack = state.attack & 0x0f; this.decay = state.decay & 0x0f;
+    this.sustainLevel = state.sustainLevel & 0xff; this.release = state.release & 0x0f; this.gate = state.gate;
+    this.rateLfsr = state.rateLfsr & 0x7fff; this.activeRateMatch = Math.max(0, Math.trunc(state.activeRateMatch));
+    this.rateResetPending = state.rateResetPending; this.exponentialCounter = Math.max(0, Math.trunc(state.exponentialCounter));
+    this.exponentialPeriod = Math.max(1, Math.trunc(state.exponentialPeriod));
+    this.deferredExponentialPeriod = Math.max(0, Math.trunc(state.deferredExponentialPeriod));
+    this.envelopeStepPipeline = Math.max(0, Math.trunc(state.envelopeStepPipeline));
+    this.exponentialPipeline = Math.max(0, Math.trunc(state.exponentialPipeline)); this.counterEnabled = state.counterEnabled;
+    this.envelopeCounter = state.envelopeCounter & 0xff; this.envReadLatch = state.envReadLatch & 0xff;
+    this.stateValue = state.state; this.nextState = state.nextState; this.statePipeline = Math.max(0, Math.trunc(state.statePipeline));
   }
 
   writeAttackDecay(value: number): void {

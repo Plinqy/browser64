@@ -20,6 +20,9 @@ export interface CartridgeDevice {
   reset(): void;
   /** Optional physical FREEZE button hook. */
   freeze?(): void;
+  /** Optional serializable cartridge-local state for emulator save states. */
+  saveState?(): unknown;
+  restoreState?(state: unknown): void;
   readRomL(address: number): number | undefined;
   readRomH(address: number): number | undefined;
   readIo1(offset: number, sideEffectFree: boolean): number | undefined;

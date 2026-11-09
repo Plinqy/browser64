@@ -5,27 +5,34 @@ import {
   C64_PALETTE,
   CHARACTER_ROM_SIZE,
   KERNAL_ROM_SIZE,
+  NTSC_6567R8_TIMING,
+  PAL_6569_TIMING,
   VIC_FRAMEBUFFER_HEIGHT,
   VIC_FRAMEBUFFER_WIDTH,
   VicGraphicsMode,
   parseD64,
   parsePrg,
+  type C64MachineState,
   type C64RomKind,
   type D64DirectoryEntry,
   type D64Image,
   type MonitorStopReason,
-  type SidChipModel
+  type RawCartridgeMode,
+  type SidChipModel,
+  type VicVideoStandard
 } from './core';
 import { SidAudio } from './audio/SidAudio';
 import { HostInputController, type JoystickCapturePort } from './input/HostInputController';
+import { browserSessionStore, type RestoredBrowserSession, type SessionPreferences } from './session/BrowserSession';
+import { decodeMachineState, encodeMachineState } from './session/StateCodec';
 
 const app = document.querySelector<HTMLElement>('#app');
 if (app === null) {
   throw new Error('Missing #app element.');
 }
 
-export const machine = new C64Machine();
-const sidAudio = new SidAudio(machine.bus.io.sid);
+export let machine = new C64Machine();
+let sidAudio = new SidAudio(machine.bus.io.sid);
 const traceLines: string[] = [];
 let poweredOn = false;
 let running = false;
@@ -37,13 +44,14 @@ let selectedD64Prg: D64DirectoryEntry | null = null;
 let animationFrame: number | null = null;
 let lastAnimationTime = 0;
 let frameAccumulatorMs = 0;
+export let sessionReady: Promise<RestoredBrowserSession>;
 
 app.innerHTML = `
   <section class="shell">
     <header>
       <p class="eyebrow">FROM-SCRATCH C64 EMULATOR</p>
       <h1>Commodore 64 Development Console</h1>
-      <p>v0.15 — peripheral completeness: writable D64/G64 media, 1541 write path, banked cartridges, expansion interrupt hooks, and C64 TAP v1 recording.</p>
+      <p>v0.16 — user-facing completeness: save states, persistent browser sessions, PAL/NTSC profiles, SID selection, and automatic media restoration.</p>
     </header>
 
     <article class="panel rom-panel">
@@ -70,6 +78,12 @@ app.innerHTML = `
       <button id="step" disabled>Step</button>
       <button id="run100" disabled>Run 100</button>
       <button id="run-frame" disabled>Run Frame</button>
+      <span class="toolbar-separator" aria-hidden="true"></span>
+      <button id="quick-save" disabled>Quick Save</button>
+      <button id="quick-load">Quick Load</button>
+      <button id="export-state" disabled>Export State</button>
+      <label class="state-file-label">Import State<input id="state-file" type="file" accept=".json,.c64state,application/json" /></label>
+      <button id="clear-session">Forget Saved Session</button>
     </section>
 
     <div id="error" class="error-banner" hidden></div>
@@ -84,7 +98,14 @@ app.innerHTML = `
       </div>
       <div class="sid-controls">
         <label>
-          Chip model
+          Video standard
+          <select id="video-standard">
+            <option value="pal">PAL-B · MOS 6569 · 985248 Hz</option>
+            <option value="ntsc">NTSC-M · MOS 6567R8 · 1022727 Hz</option>
+          </select>
+        </label>
+        <label>
+          SID chip
           <select id="sid-model">
             <option value="6581">MOS 6581</option>
             <option value="8580">MOS 8580</option>
@@ -295,9 +316,15 @@ const d64PrgSelect = mustSelect('d64-prg');
 const loadD64PrgButton = mustButton('load-d64-prg');
 const runD64PrgButton = mustButton('run-d64-prg');
 const joystickSelect = mustSelect('joystick-capture');
+const videoStandardSelect = mustSelect('video-standard');
 const sidModelSelect = mustSelect('sid-model');
 const audioEnableButton = mustButton('audio-enable');
 const audioMuteButton = mustButton('audio-mute');
+const quickSaveButton = mustButton('quick-save');
+const quickLoadButton = mustButton('quick-load');
+const exportStateButton = mustButton('export-state');
+const stateFileInput = mustInput('state-file');
+const clearSessionButton = mustButton('clear-session');
 
 const monitorBreakAddressInput = mustInput('monitor-break-address');
 const monitorAddBreakButton = mustButton('monitor-add-break');
@@ -325,10 +352,7 @@ const monitorWriteValueInput = mustInput('monitor-write-value');
 const monitorWriteMemoryButton = mustButton('monitor-write-memory');
 const monitorClearHistoryButton = mustButton('monitor-clear-history');
 
-const hostInput = new HostInputController(machine.bus.io.keyboard, {
-  setRestorePressed: (pressed) => machine.setRestorePressed(pressed),
-  setJoystickControl: (port, control, pressed) => machine.setJoystickControl(port, control, pressed)
-});
+let hostInput = createHostInputController();
 
 for (const kind of ['basic', 'kernal', 'character'] as const) {
   const input = mustInput(`rom-${kind}`);
@@ -336,6 +360,7 @@ for (const kind of ['basic', 'kernal', 'character'] as const) {
     const file = input.files?.[0];
     if (file === undefined) {
       machine.bus.roms.unload(kind);
+      void browserSessionStore.removeAsset(romAssetKind(kind));
       setRomStatus(kind, 'Not loaded', false);
       powerDownUiState();
       updateControls();
@@ -346,6 +371,7 @@ for (const kind of ['basic', 'kernal', 'character'] as const) {
     try {
       const bytes = new Uint8Array(await file.arrayBuffer());
       machine.loadRom(kind, bytes);
+      await browserSessionStore.putAsset(romAssetKind(kind), { name: file.name, bytes, mediaType: 'rom' });
       setRomStatus(kind, `${file.name} · ${bytes.length} bytes`, true);
       lastError = '';
       powerDownUiState();
@@ -461,6 +487,7 @@ prgInput.addEventListener('change', async () => {
   const file = prgInput.files?.[0];
   if (file === undefined) {
     selectedPrg = null;
+    void browserSessionStore.removeAsset('prg');
     updatePrgStatus();
     updateControls();
     return;
@@ -475,6 +502,7 @@ d64Input.addEventListener('change', async () => {
   const file = d64Input.files?.[0];
   if (file === undefined) {
     clearMountedD64();
+    void browserSessionStore.removeAsset('disk-1541');
     updateControls();
     return;
   }
@@ -506,12 +534,30 @@ programPanel.addEventListener('drop', (event) => {
 
 joystickSelect.addEventListener('change', () => {
   hostInput.setJoystickCapture(joystickCaptureFromValue(joystickSelect.value));
+  void persistPreferences();
   updateInputStatus();
   vicCanvas.focus();
 });
 
+videoStandardSelect.addEventListener('change', async () => {
+  if (poweredOn) {
+    videoStandardSelect.value = machine.timing.standard;
+    return;
+  }
+  try {
+    await persistPreferences();
+    await rebuildMachineForPreferences(preferencesFromControls());
+    lastError = '';
+  } catch (error) {
+    lastError = errorMessage(error);
+  }
+  updateControls();
+  render();
+});
+
 sidModelSelect.addEventListener('change', () => {
   machine.bus.io.sid.setModel(sidModelSelect.value as SidChipModel);
+  void persistPreferences();
   sidAudio.clear();
   render();
 });
@@ -524,6 +570,70 @@ audioEnableButton.addEventListener('click', async () => {
 audioMuteButton.addEventListener('click', () => {
   sidAudio.setMuted(!sidAudio.isMuted);
   audioMuteButton.textContent = sidAudio.isMuted ? 'Unmute' : 'Mute';
+  render();
+});
+
+quickSaveButton.addEventListener('click', async () => {
+  if (!poweredOn || running) return;
+  try {
+    const state = machine.saveState();
+    await browserSessionStore.saveQuickState(state);
+    traceLines.push(`QUICK SAVE -> frame ${machine.bus.io.vic.frameNumber} PC=$${hex(machine.cpu.pc, 4)}`);
+    lastError = '';
+  } catch (error) {
+    lastError = errorMessage(error);
+  }
+  render();
+});
+
+quickLoadButton.addEventListener('click', async () => {
+  try {
+    const state = await browserSessionStore.loadQuickState();
+    if (state === null) throw new Error('No quick save is stored in this browser.');
+    await restoreMachineState(state, 'QUICK LOAD');
+  } catch (error) {
+    lastError = errorMessage(error);
+  }
+  updateControls();
+  render();
+});
+
+exportStateButton.addEventListener('click', () => {
+  if (!poweredOn || running) return;
+  try {
+    const json = encodeMachineState(machine.saveState());
+    downloadText(json, `c64-state-${machine.timing.standard}-${Date.now()}.c64state`);
+    lastError = '';
+  } catch (error) {
+    lastError = errorMessage(error);
+  }
+  render();
+});
+
+stateFileInput.addEventListener('change', async () => {
+  const file = stateFileInput.files?.[0];
+  if (file === undefined) return;
+  try {
+    const state = decodeMachineState(await file.text());
+    await restoreMachineState(state, `STATE ${file.name}`);
+    lastError = '';
+  } catch (error) {
+    lastError = errorMessage(error);
+  } finally {
+    stateFileInput.value = '';
+  }
+  updateControls();
+  render();
+});
+
+clearSessionButton.addEventListener('click', async () => {
+  try {
+    await browserSessionStore.clearAll();
+    traceLines.push('BROWSER SESSION STORAGE CLEARED');
+    lastError = '';
+  } catch (error) {
+    lastError = errorMessage(error);
+  }
   render();
 });
 
@@ -634,6 +744,11 @@ updatePrgStatus();
 clearMountedD64();
 updateInputStatus();
 render();
+sessionReady = restorePersistedSession();
+void sessionReady.catch((error) => {
+  lastError = `Session restore: ${errorMessage(error)}`;
+  render();
+});
 
 function doStep(flush = true): void {
   if (!poweredOn) {
@@ -711,6 +826,7 @@ async function selectPrg(file: File): Promise<void> {
     const bytes = new Uint8Array(await file.arrayBuffer());
     const parsed = parsePrg(bytes);
     selectedPrg = { name: file.name, bytes };
+    await browserSessionStore.putAsset('prg', { name: file.name, bytes, mediaType: 'prg' });
     lastError = '';
     prgStatusElement.textContent = `${file.name} · $${hex(parsed.loadAddress, 4)} · ${parsed.payload.length} bytes`;
     prgStatusElement.classList.add('ready');
@@ -757,6 +873,7 @@ async function mountD64(file: File): Promise<void> {
     const bytes = new Uint8Array(await file.arrayBuffer());
     const image = parseD64(bytes);
     const entries = image.listDirectory();
+    await browserSessionStore.putAsset('disk-1541', { name: file.name, bytes, mediaType: 'd64', writeProtected: false });
     mountedD64 = { name: file.name, image, entries };
     selectedD64Prg = entries.find((entry) => entry.fileType === 'PRG') ?? null;
     lastError = '';
@@ -848,6 +965,175 @@ function formatD64DirectoryEntry(entry: D64DirectoryEntry): string {
   const blocks = String(entry.blocks).padStart(4, ' ');
   const flags = `${entry.closed ? ' ' : '*'}${entry.locked ? '<' : ' '}`;
   return `${blocks}  "${entry.filename}" ${entry.fileType}${flags}`;
+}
+
+function createHostInputController(): HostInputController {
+  return new HostInputController(machine.bus.io.keyboard, {
+    setRestorePressed: (pressed) => machine.setRestorePressed(pressed),
+    setJoystickControl: (port, control, pressed) => machine.setJoystickControl(port, control, pressed)
+  });
+}
+
+function preferencesFromControls(): SessionPreferences {
+  return {
+    videoStandard: videoStandardSelect.value === 'ntsc' ? 'ntsc' : 'pal',
+    sidModel: sidModelSelect.value === '8580' ? '8580' : '6581',
+    joystickCapture: joystickSelect.value === '1' || joystickSelect.value === '2'
+      ? joystickSelect.value
+      : 'keyboard'
+  };
+}
+
+async function persistPreferences(): Promise<void> {
+  await browserSessionStore.savePreferences(preferencesFromControls());
+}
+
+function timingForStandard(standard: VicVideoStandard) {
+  return standard === 'ntsc' ? NTSC_6567R8_TIMING : PAL_6569_TIMING;
+}
+
+async function rebuildMachineForPreferences(
+  preferences: SessionPreferences,
+  restoredSession?: RestoredBrowserSession
+): Promise<void> {
+  hostInput.releaseAll();
+  await persistLivePeripheralMedia();
+  await sidAudio.dispose();
+
+  machine = new C64Machine({
+    timing: timingForStandard(preferences.videoStandard),
+    sidModel: preferences.sidModel
+  });
+  sidAudio = new SidAudio(machine.bus.io.sid);
+  hostInput = createHostInputController();
+
+  videoStandardSelect.value = preferences.videoStandard;
+  sidModelSelect.value = preferences.sidModel;
+  joystickSelect.value = preferences.joystickCapture;
+  hostInput.setJoystickCapture(joystickCaptureFromValue(preferences.joystickCapture));
+  powerDownUiState();
+
+  const session = restoredSession ?? await browserSessionStore.loadSession();
+  applySessionAssets(session);
+  updatePrgStatus();
+  updateInputStatus();
+  updateControls();
+  render();
+}
+
+async function restorePersistedSession(): Promise<RestoredBrowserSession> {
+  const session = await browserSessionStore.loadSession();
+  await rebuildMachineForPreferences(session.preferences, session);
+  traceLines.push('BROWSER SESSION RESTORED');
+  render();
+  return session;
+}
+
+function applySessionAssets(session: RestoredBrowserSession): void {
+  const assets = session.assets;
+  selectedPrg = null;
+  clearMountedD64();
+
+  for (const kind of ['basic', 'kernal', 'character'] as const) {
+    const asset = assets[romAssetKind(kind)];
+    if (asset === undefined) {
+      setRomStatus(kind, 'Not loaded', false);
+      continue;
+    }
+    machine.loadRom(kind, asset.bytes);
+    setRomStatus(kind, `${asset.name} · ${asset.bytes.length} bytes · restored`, true);
+  }
+
+  const driveRom = assets['rom-1541'];
+  if (driveRom !== undefined) machine.load1541Rom(driveRom.bytes);
+
+  const disk = assets['disk-1541'];
+  if (disk?.mediaType === 'd64') {
+    const image = parseD64(disk.bytes);
+    const entries = image.listDirectory();
+    mountedD64 = { name: disk.name, image, entries };
+    selectedD64Prg = entries.find((entry) => entry.fileType === 'PRG') ?? null;
+    renderD64Directory();
+    machine.mountD64In1541(disk.bytes, disk.writeProtected ?? false);
+  } else if (disk?.mediaType === 'g64') {
+    machine.mountG64In1541(disk.bytes, disk.writeProtected ?? false);
+  }
+
+  const cartridge = assets.cartridge;
+  if (cartridge?.mediaType === 'crt') {
+    machine.mountCrt(cartridge.bytes);
+  } else if (cartridge?.mediaType === 'raw' && cartridge.rawCartridgeMode !== undefined) {
+    machine.mountRawCartridge(cartridge.bytes, cartridge.rawCartridgeMode as RawCartridgeMode, cartridge.name);
+  }
+
+  const tape = assets.tape;
+  if (tape?.mediaType === 'tap') machine.mountTap(tape.bytes, tape.writeProtected ?? false);
+
+  const prg = assets.prg;
+  if (prg?.mediaType === 'prg') selectedPrg = { name: prg.name, bytes: prg.bytes.slice() };
+}
+
+async function persistLivePeripheralMedia(): Promise<void> {
+  const disk = machine.export1541Media();
+  if (disk !== null) {
+    const previous = await browserSessionStore.loadAsset('disk-1541');
+    await browserSessionStore.putAsset('disk-1541', {
+      name: previous?.name ?? `disk.${disk.kind}`,
+      bytes: disk.bytes,
+      mediaType: disk.kind,
+      writeProtected: machine.drive1541.mechanism.writeProtected
+    });
+  }
+
+  const tape = machine.exportTape();
+  if (tape !== null) {
+    const previous = await browserSessionStore.loadAsset('tape');
+    await browserSessionStore.putAsset('tape', {
+      name: previous?.name ?? 'recording.tap',
+      bytes: tape,
+      mediaType: 'tap',
+      writeProtected: machine.bus.datasette.writeProtected
+    });
+  }
+}
+
+async function restoreMachineState(state: C64MachineState, label: string): Promise<void> {
+  if (state.videoStandard !== machine.timing.standard) {
+    const preferences: SessionPreferences = {
+      ...preferencesFromControls(),
+      videoStandard: state.videoStandard,
+      sidModel: state.bus.sid.model
+    };
+    videoStandardSelect.value = preferences.videoStandard;
+    sidModelSelect.value = preferences.sidModel;
+    await browserSessionStore.savePreferences(preferences);
+    await rebuildMachineForPreferences(preferences);
+  }
+
+  machine.restoreState(state);
+  poweredOn = true;
+  setRunning(false);
+  sidModelSelect.value = machine.bus.io.sid.model;
+  await browserSessionStore.savePreferences(preferencesFromControls());
+  sidAudio.clear();
+  traceLines.push(`${label} -> frame ${machine.bus.io.vic.frameNumber} PC=$${hex(machine.cpu.pc, 4)}`);
+  lastError = '';
+  updateControls();
+  render();
+}
+
+function romAssetKind(kind: C64RomKind): 'rom-basic' | 'rom-kernal' | 'rom-character' {
+  return `rom-${kind}` as 'rom-basic' | 'rom-kernal' | 'rom-character';
+}
+
+function downloadText(text: string, filename: string): void {
+  const blob = new Blob([text], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = filename;
+  anchor.click();
+  URL.revokeObjectURL(url);
 }
 
 async function tryStartAudio(): Promise<void> {
@@ -1216,6 +1502,9 @@ function updateControls(): void {
   monitorWriteMemoryButton.disabled = !poweredOn || running;
   monitorContinueButton.disabled = !poweredOn || running;
   monitorClearHistoryButton.disabled = !poweredOn;
+  quickSaveButton.disabled = !poweredOn || running;
+  exportStateButton.disabled = !poweredOn || running;
+  videoStandardSelect.disabled = poweredOn;
   runToggleButton.textContent = running ? 'Pause' : 'Run';
 }
 

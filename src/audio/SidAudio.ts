@@ -43,6 +43,17 @@ export class SidAudio {
     if (this.gain !== null) this.gain.gain.value = muted ? 0 : 1;
   }
 
+  async dispose(): Promise<void> {
+    this.node?.disconnect();
+    this.gain?.disconnect();
+    const context = this.context;
+    this.context = null;
+    this.node = null;
+    this.gain = null;
+    this.startPromise = null;
+    if (context !== null && context.state !== 'closed') await context.close();
+  }
+
   get active(): boolean {
     return this.context !== null && this.node !== null;
   }

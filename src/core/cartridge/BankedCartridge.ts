@@ -59,6 +59,17 @@ export class BankedCartridge implements CartridgeDevice {
 
   get bank(): number { return this.selectedBank; }
 
+  saveState(): { readonly bank: number; readonly disabled: boolean } {
+    return { bank: this.selectedBank, disabled: this.disabled };
+  }
+
+  restoreState(state: unknown): void {
+    if (typeof state !== 'object' || state === null) return;
+    const value = state as { bank?: unknown; disabled?: unknown };
+    if (typeof value.disabled === 'boolean') this.disabled = value.disabled;
+    if (typeof value.bank === 'number' && Number.isInteger(value.bank)) this.selectBank(value.bank & 0x7f);
+  }
+
   readRomL(address: number): number | undefined { return this.readSelectedChip(address); }
   readRomH(address: number): number | undefined { return this.readSelectedChip(address); }
 

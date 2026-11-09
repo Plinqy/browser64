@@ -4,6 +4,22 @@ const ACC_MASK = 0x00ff_ffff;
 const LFSR_MASK = 0x007f_ffff;
 const LFSR_RESET_SEED = 0x007f_fff8;
 
+export interface SidOscillatorState {
+  readonly frequency: number;
+  readonly pulseWidth: number;
+  readonly control: number;
+  readonly accumulator: number;
+  readonly lfsr: number;
+  readonly shiftDelay: number;
+  readonly testShiftResetTtl: number;
+  readonly msbRose: boolean;
+  readonly pulseOutput: number;
+  readonly waveformOutput: number;
+  readonly oscReadOutput: number;
+  readonly floatingOutput: number;
+  readonly floatingTtl: number;
+}
+
 export class SidOscillator {
   private frequencyValue = 0;
   private pulseWidthValue = 0;
@@ -45,6 +61,32 @@ export class SidOscillator {
 
   setModel(model: SidChipModel): void {
     this.model = model;
+  }
+
+  saveState(): SidOscillatorState {
+    return {
+      frequency: this.frequencyValue, pulseWidth: this.pulseWidthValue, control: this.controlValue,
+      accumulator: this.accumulatorValue, lfsr: this.lfsr, shiftDelay: this.shiftDelay,
+      testShiftResetTtl: this.testShiftResetTtl, msbRose: this.msbRose, pulseOutput: this.pulseOutput,
+      waveformOutput: this.waveformOutput, oscReadOutput: this.oscReadOutput,
+      floatingOutput: this.floatingOutput, floatingTtl: this.floatingTtl
+    };
+  }
+
+  restoreState(state: SidOscillatorState): void {
+    this.frequencyValue = state.frequency & 0xffff;
+    this.pulseWidthValue = state.pulseWidth & 0x0fff;
+    this.controlValue = state.control & 0xff;
+    this.accumulatorValue = state.accumulator & ACC_MASK;
+    this.lfsr = state.lfsr & LFSR_MASK;
+    this.shiftDelay = Math.max(0, Math.trunc(state.shiftDelay));
+    this.testShiftResetTtl = Math.max(0, Math.trunc(state.testShiftResetTtl));
+    this.msbRose = state.msbRose;
+    this.pulseOutput = state.pulseOutput & 0x0fff;
+    this.waveformOutput = state.waveformOutput & 0x0fff;
+    this.oscReadOutput = state.oscReadOutput & 0x0fff;
+    this.floatingOutput = state.floatingOutput & 0x0fff;
+    this.floatingTtl = Math.max(0, Math.trunc(state.floatingTtl));
   }
 
   writeFrequencyLow(value: number): void {

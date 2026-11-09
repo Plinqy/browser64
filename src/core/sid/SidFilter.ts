@@ -1,6 +1,21 @@
 import type { SidChipModel } from './SidModel';
 import { SID_MODEL_CHARACTERISTICS } from './SidModel';
 
+
+export interface SidFilterState {
+  readonly fc: number;
+  readonly resonance: number;
+  readonly routing: number;
+  readonly modeVolume: number;
+  readonly lp: number;
+  readonly bp: number;
+  readonly hp: number;
+  readonly extLowpass: number;
+  readonly extDc: number;
+  readonly externalInput: number;
+  readonly output: number;
+}
+
 export interface SidFilterInput {
   readonly voice1: number;
   readonly voice2: number;
@@ -63,6 +78,21 @@ export class SidFilter {
     this.model = model;
     this.updateFilterCoefficient();
     this.updateDamping();
+  }
+
+  saveState(): SidFilterState {
+    return {
+      fc: this.fc, resonance: this.resonance, routing: this.routing, modeVolume: this.modeVolume,
+      lp: this.lp, bp: this.bp, hp: this.hp, extLowpass: this.extLowpass, extDc: this.extDc,
+      externalInput: this.externalInputValue, output: this.outputValue
+    };
+  }
+
+  restoreState(state: SidFilterState): void {
+    this.fc = state.fc & 0x07ff; this.resonance = state.resonance & 0x0f; this.routing = state.routing & 0x0f;
+    this.modeVolume = state.modeVolume & 0xff; this.lp = state.lp; this.bp = state.bp; this.hp = state.hp;
+    this.extLowpass = state.extLowpass; this.extDc = state.extDc; this.externalInputValue = state.externalInput;
+    this.outputValue = state.output; this.updateCoefficients();
   }
 
   setClockFrequency(clockHz: number): void {

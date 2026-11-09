@@ -59,3 +59,10 @@ export interface CpuRegisters {
 export interface CpuSnapshot extends CpuRegisters {
   cycles: number;
 }
+
+export interface CpuState extends CpuSnapshot {
+  readonly irqLine: boolean;
+  readonly nmiPending: boolean;
+  readonly jammed: boolean;
+  readonly jamAddress: number;
+}

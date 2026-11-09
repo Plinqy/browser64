@@ -2,6 +2,7 @@ import { cartridgeFromCrt } from '../cartridge/BankedCartridge';
 import { GenericCartridge, type RawCartridgeMode } from '../cartridge/GenericCartridge';
 import { parseCrt, type CrtImage } from '../cartridge/CrtImage';
 import { Cpu6510, type CpuClockResult } from '../cpu/Cpu6510';
+import type { CpuState } from '../cpu/types';
 import { C1541Drive, C1541_CLOCK_HZ } from '../drive1541/C1541Drive';
 import type { D64Image } from '../disk/D64Image';
 import type { G64Image } from '../disk/G64Image';
@@ -11,11 +12,33 @@ import { Disassembler } from '../debugger/Disassembler';
 import { TraceFormatter } from '../debugger/TraceFormatter';
 import { C64Monitor } from '../debugger/Monitor';
 import type { JoystickControl, JoystickPort } from '../io/C64Io';
-import { C64Bus } from '../memory/C64Bus';
+import { C64Bus, type C64BusState } from '../memory/C64Bus';
 import { parsePrg, type PrgLoadResult } from '../program/Prg';
 import type { C64RomKind } from '../rom/RomSet';
+import type { SidChipModel } from '../sid/SidModel';
 import { TapImage } from '../tape/TapImage';
 import { PAL_6569_TIMING, type VicTimingProfile } from '../vic/VicTiming';
+
+export interface C64MachineOptions {
+  readonly timing?: VicTimingProfile;
+  readonly sidModel?: SidChipModel;
+}
+
+
+export interface C64MachineState {
+  readonly format: 'c64-browser-emulator-state';
+  readonly version: 1;
+  readonly videoStandard: 'pal' | 'ntsc';
+  readonly systemClockHz: number;
+  readonly cpu: CpuState;
+  readonly bus: C64BusState;
+  readonly masterCycleCounter: number;
+  readonly cpuStallCounter: number;
+  readonly cia2IrqWasAsserted: boolean;
+  readonly expansionNmiWasAsserted: boolean;
+  readonly restorePressed: boolean;
+  readonly driveClockAccumulator: number;
+}
 
 export interface C64SystemCycleResult {
   cpu: CpuClockResult;
@@ -51,8 +74,12 @@ export class C64Machine {
   private driveClockAccumulator = 0;
   private readonly c64ResetEndpoint: IecEndpoint;
 
-  constructor(public readonly timing: VicTimingProfile = PAL_6569_TIMING) {
-    this.bus = new C64Bus(timing);
+  public readonly timing: VicTimingProfile;
+
+  constructor(options: C64MachineOptions | VicTimingProfile = {}) {
+    const normalized = isTimingProfile(options) ? { timing: options } : options;
+    this.timing = normalized.timing ?? PAL_6569_TIMING;
+    this.bus = new C64Bus(this.timing, normalized.sidModel ?? '6581');
     this.cpu = new Cpu6510(this.bus);
     this.drive1541 = new C1541Drive(this.bus.io.iecBus, 8);
     this.c64ResetEndpoint = this.bus.io.iecBus.createEndpoint('c64-reset');
@@ -329,6 +356,59 @@ export class C64Machine {
     this.syncInterruptLines();
   }
 
+  /**
+   * Capture the motherboard at an instruction boundary. The independent 1541
+   * electronics are intentionally not serialized; restoreState() resets the
+   * drive CPU/VIAs while preserving its mounted media and head position.
+   */
+  saveState(): C64MachineState {
+    if (this.cpu.instructionInProgress) {
+      throw new Error('Save states are only available at a 6510 instruction boundary.');
+    }
+    return {
+      format: 'c64-browser-emulator-state',
+      version: 1,
+      videoStandard: this.timing.standard,
+      systemClockHz: this.timing.systemClockHz,
+      cpu: this.cpu.saveState(),
+      bus: this.bus.saveState(),
+      masterCycleCounter: this.masterCycleCounter,
+      cpuStallCounter: this.cpuStallCounter,
+      cia2IrqWasAsserted: this.cia2IrqWasAsserted,
+      expansionNmiWasAsserted: this.expansionNmiWasAsserted,
+      restorePressed: this.restorePressed,
+      driveClockAccumulator: this.driveClockAccumulator
+    };
+  }
+
+  restoreState(state: C64MachineState): void {
+    if (state.format !== 'c64-browser-emulator-state' || state.version !== 1) {
+      throw new Error('Unsupported C64 save-state format.');
+    }
+    if (state.videoStandard !== this.timing.standard || state.systemClockHz !== this.timing.systemClockHz) {
+      throw new Error(`Save state requires ${state.videoStandard.toUpperCase()} timing.`);
+    }
+    this.monitor.beginMachineReset();
+    try {
+      this.bus.restoreState(state.bus);
+      this.cpu.restoreState(state.cpu);
+      this.masterCycleCounter = Math.max(0, Math.trunc(state.masterCycleCounter));
+      this.cpuStallCounter = Math.max(0, Math.trunc(state.cpuStallCounter));
+      this.cia2IrqWasAsserted = state.cia2IrqWasAsserted;
+      this.expansionNmiWasAsserted = state.expansionNmiWasAsserted;
+      this.restorePressed = state.restorePressed;
+      this.driveClockAccumulator = Math.max(0, state.driveClockAccumulator);
+      // A 1541 can be in the middle of a 6502 micro-operation when the C64 is
+      // at an instruction boundary. Reset its electronics rather than create
+      // a false half-restored state; mounted disk/head position are preserved.
+      this.drive1541.reset();
+      this.syncInterruptLines();
+      this.monitor.clearHistory();
+    } finally {
+      this.monitor.endMachineReset();
+    }
+  }
+
   get masterCycles(): number {
     return this.masterCycleCounter;
   }
@@ -393,4 +473,8 @@ export class C64Machine {
 
 function videoStandardForTiming(timing: VicTimingProfile): number {
   return timing.standard === 'ntsc' ? 1 : 0;
+}
+
+function isTimingProfile(value: C64MachineOptions | VicTimingProfile): value is VicTimingProfile {
+  return 'cyclesPerLine' in value && 'linesPerFrame' in value && 'systemClockHz' in value;
 }
