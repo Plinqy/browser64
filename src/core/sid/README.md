@@ -50,7 +50,7 @@ Hard sync is evaluated only after all oscillators have clocked, including the ch
 
 ### Combined waveforms
 
-Real combined waveforms are analog interactions between selector lines, not a simple Boolean AND. Exact output also varies by chip revision and individual silicon. To keep this project independently implemented and license-clean, v0.8 uses an algorithmic neighbor-coupling model rather than measured lookup tables. Noise combinations include destructive write-back to the LFSR selector taps so they can collapse/lock as on hardware.
+Real combined waveforms are analog interactions between selector lines, not a simple Boolean AND. Exact output also varies by chip revision and individual silicon. To keep this project independently implemented and license-clean, the current model uses algorithmic neighbor coupling rather than measured lookup tables. Noise combinations include destructive write-back to the LFSR selector taps so they can collapse/lock as on hardware.
 
 This is intentionally marked as an approximation and is a future candidate for empirical validation against hardware measurements.
 
@@ -84,7 +84,7 @@ The chip produces one normalized analog-output value per system cycle. `configur
 
 ## Accuracy Boundary
 
-v0.8 intentionally distinguishes implemented hardware behavior from remaining analog uncertainty. The following are not claimed bit-/sample-exact yet:
+The v1.0 release intentionally distinguishes implemented hardware behavior from remaining analog uncertainty. The following are not claimed bit-/sample-exact:
 
 - measured combined-waveform tables and long-term floating-waveform bit fade,
 - per-chip 6581 filter calibration and full nonlinear op-amp/VCR simulation,
@@ -97,4 +97,4 @@ Those limits are compatibility work, not hidden shortcuts.
 
 ## Appendix A — SID API and Reference Manual v1
 
-Planning and table-of-contents work has begun in [`SID_API_REFERENCE_MANUAL_V1.md`](./SID_API_REFERENCE_MANUAL_V1.md). Per the v1 request, that document contains structure/planning only and deliberately does not yet attempt the full reference manual.
+The planned long-form API/hardware reference is tracked in [`SID_API_REFERENCE_MANUAL_V1.md`](./SID_API_REFERENCE_MANUAL_V1.md). That appendix is a current table-of-contents/planning document and is not presented as completed normative SID documentation.

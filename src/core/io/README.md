@@ -2,7 +2,7 @@
 
 ## Overview
 
-This directory owns CPU-visible device routing for the `$D000-$DFFF` C64 I/O window. As of v0.10 the VIC-II, SID, and both CIA regions contain functional device models. Color RAM is dedicated 4-bit memory rather than a normal chip register bank.
+This directory owns CPU-visible device routing for the `$D000-$DFFF` C64 I/O window. The VIC-II, SID, both CIA regions, color RAM, and expansion IO1/IO2 routing are composed here. Color RAM is dedicated 4-bit memory rather than a normal chip register bank.
 
 ## Architecture
 
@@ -26,7 +26,7 @@ The VIC-II receives a `VicMemory` provider from `C64Bus`; it does not read throu
 
 The SID runs at the selected VIC/system timing profile clock, so PAL and 6567R8 NTSC machines advance oscillator, envelope, and filter state from the same clock definition even when the 6510 is stalled by VIC DMA.
 
-CIA1 remains wired to the keyboard matrix and active-low joystick pin images. v0.7 adds named up/down/left/right/fire setters for both joystick ports; those setters only manipulate the external active-low pin image and do not bypass CIA DDR/port resolution. CIA2 Port A bits 0-1 select the VIC bank through the real inverted mapping. v0.10 also wires PA3/PA4/PA5 through the motherboard's inverted open-collector IEC outputs and feeds resolved CLOCK/DATA levels back through PA6/PA7. The shared `IecBus` remains device-agnostic; no fake 1541 protocol handling lives in the I/O decoder.
+CIA1 is wired to the keyboard matrix and active-low joystick pin images. Named up/down/left/right/fire setters manipulate only the external active-low pin image and do not bypass CIA DDR/port resolution. CIA2 Port A bits 0-1 select the VIC bank through the real inverted mapping; PA3/PA4/PA5 drive the motherboard's inverted open-collector IEC outputs and PA6/PA7 receive resolved CLOCK/DATA. The shared `IecBus` remains device-agnostic; no fake 1541 protocol handling lives in the I/O decoder.
 
 Color RAM stores only its low four bits and survives reset because it is RAM. Deterministic cold power-on clears it. On CPU reads, its undriven high nibble comes from the shared data-bus latch supplied by `C64Bus`.
 

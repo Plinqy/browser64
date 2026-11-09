@@ -12,4 +12,4 @@
 
 ## Accuracy boundary
 
-This is firmware-driven media I/O rather than a KERNAL trap. The write path and raw G64 preservation are byte-level: exact analog PLL behavior, weak/random bits, magnetic transition timing below a GCR byte, and every copy-protection quirk are still outside v0.15. Those features should extend this mechanism rather than bypass the drive CPU/VIAs/IEC architecture.
+This is firmware-driven media I/O rather than a KERNAL trap. The write path and raw G64 preservation are byte-level: exact analog PLL behavior, weak/random bits, magnetic transition timing below a GCR byte, and every copy-protection quirk remain outside the v1.0 accuracy claim. Future fidelity work should extend this mechanism rather than bypass the drive CPU/VIAs/IEC architecture.

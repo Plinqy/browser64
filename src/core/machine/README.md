@@ -2,7 +2,7 @@
 
 ## Overview
 
-`C64Machine` is the composition root for a stock Commodore 64 and is constructed with an immutable PAL/NTSC timing profile. It owns the CPU, bus, VIC-II, SID, both CIA chips, debugger interfaces, interrupt wiring, the master system clock, and the machine-level operations a host needs for ROM startup, joystick state, RESTORE, and PRG loading. The underlying `C64Bus` also owns the shared serial IEC bus used by CIA2 and future peripherals.
+`C64Machine` is the composition root for a stock Commodore 64 and is constructed with an immutable PAL/NTSC timing profile. It owns the CPU, bus, VIC-II, SID, both CIA chips, Datasette timing, debugger interfaces, interrupt wiring, the master system clock, the integrated 1541 endpoint/clock accumulator, save-state operations, and host-facing ROM/input/program controls. The underlying `C64Bus` owns the shared serial IEC bus used by CIA2 and the 1541.
 
 The browser is responsible for wall-clock pacing and host-event translation; the machine remains deterministic.
 
@@ -62,15 +62,19 @@ CIA2's interrupt output and RESTORE are separate sources on the NMI path. CIA2 i
 
 `setJoystickControl()` delegates named directions/fire to `C64Io`, which converts them to active-low CIA1 port pins. The host does not write CIA registers directly.
 
-### D64 and IEC boundary
+### D64/G64 and IEC boundary
 
-D64 parsing is not a machine timing operation. The browser/core storage layer can extract a PRG from a mounted image and then invoke the same `loadPrg()` path described below. The physical `IecBus` is separate and stays connected to CIA2 regardless of whether a D64 image is mounted. A later 1541 emulator can therefore attach to IEC without replacing or depending on host-assisted disk browsing.
+Host-assisted D64 parsing is not a machine timing operation: the storage layer can extract a PRG and invoke the same `loadPrg()` path described below. Separately, `C64Machine` owns a firmware-driven `C1541Drive` attached to the same physical `IecBus` as CIA2. `mountD64In1541()` and `mountG64In1541()` feed media to that drive without making host-assisted browsing part of IEC behavior. The drive clock remains 1 MHz and is advanced by rational accumulation against the selected PAL/NTSC motherboard clock.
 
 ### PRG loading
 
 `loadPrg()` parses a two-byte little-endian load address, copies payload bytes into physical RAM, and returns load metadata. When the address is `$0801`, it can update BASIC's `TXTTAB`, `VARTAB`, `ARYTAB`, and `STREND` pointers. It does not assume the load address is executable.
 
 `startAt()` is the explicit debugger/host escape hatch for machine-code files whose entry point is known. It deliberately discards any partially scheduled CPU instruction before changing PC.
+
+### Save states
+
+`saveState()` is allowed only at a 6510 instruction boundary and captures motherboard state deeply. `loadState()` validates the format and PAL/NTSC standard before restoring CPU, RAM, VIC, CIA, SID, Datasette, bus-latch, processor-port, and supported cartridge-bank state. The 1541 CPU/VIA electronics are reset during restore rather than serializing an arbitrary independent-drive microcycle; mounted media and mechanism position remain attached.
 
 ### SID timing
 

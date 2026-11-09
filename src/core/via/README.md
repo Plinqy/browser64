@@ -6,7 +6,7 @@
 
 ## Architecture
 
-The VIA owns no host/browser state. External hardware is attached through input providers and output callbacks for PA/PB and CA2/CB1/CB2. CA1/CA2/CB1/CB2 input lines are driven explicitly, which lets the same core connect to IEC logic, the 1541 gate-array/mechanism model, or future peripherals.
+The VIA owns no host/browser state. External hardware is attached through input providers and output callbacks for PA/PB and CA2/CB1/CB2. CA1/CA2/CB1/CB2 input lines are driven explicitly, which lets the same core connect to IEC logic, the 1541 gate-array/mechanism model, or additional peripherals without adding browser knowledge to the VIA core.
 
 Timers advance from `tick()` in PHI2 units. IRQ is derived from `IFR & IER`, while `peek()` returns register state without clearing flags or triggering handshake side effects.
 

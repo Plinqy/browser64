@@ -12,6 +12,6 @@ The memory bus owns one `C64Roms` instance and selects its bytes only when the 6
 
 ## Implementation Discussion
 
-Unloaded ROM arrays are filled with `$FF`. This produces deterministic behavior and makes missing-ROM execution fail visibly instead of accidentally running zero-filled memory as BRK instructions. `C64Roms.complete` is a convenience for the browser UI and future machine startup checks.
+Unloaded ROM arrays are filled with `$FF`. This produces deterministic behavior and makes missing-ROM execution fail visibly instead of accidentally running zero-filled memory as BRK instructions. `C64Roms.complete` is used by the browser UI to keep Power On disabled until all three motherboard ROMs are present.
 
 Only exact image sizes are accepted. Headered archive formats, ROM database identification, revision detection, and checksums are intentionally deferred. Those concerns can be added as import-layer features without changing the bus-facing fixed-size byte arrays.

@@ -1,146 +1,112 @@
-# v0.10 Verification
+# v1.0 Verification
 
-Version 0.10 adds D64 disk-image parsing and a physical serial IEC bus foundation while preserving the v0.9 CPU/VIC/CIA/SID timing model. The accelerated D64 path is intentionally host-assisted: it extracts a PRG from disk sectors and feeds the existing PRG loader, while the IEC layer remains an independent electrical bus for the later real-1541 phase.
+Version 1.0 is the release-hardening milestone for the browser Commodore 64 emulator. It does not broaden the compatibility claim into transistor-level or half-cycle behavior that the core does not model. Instead it freezes the supported feature set, strengthens release smoke coverage, hardens browser persistence/audio startup failure paths, and makes the documentation describe the actual current tree rather than historical milestones.
 
-## D64 geometry and parser scope
+## Release scope
 
-`D64Image` accepts these exact image geometries:
+The v1.0 release gate covers the following user-visible paths:
 
-| Tracks | Sectors | Data bytes | With error table |
-| ---: | ---: | ---: | ---: |
-| 35 | 683 | 174,848 | 175,531 |
-| 40 | 768 | 196,608 | 197,376 |
-| 42 | 802 | 205,312 | 206,114 |
+- booting user-supplied BASIC, KERNAL, and character ROMs through the real reset vector;
+- entering BASIC programs through the CIA1 keyboard matrix;
+- PRG and normal T64 PRG loading through the canonical machine loader;
+- host-assisted D64 PRG extraction for convenience;
+- firmware-driven 1541 operation over the shared IEC bus with user-supplied 1541 DOS ROM;
+- writable D64 and raw G64 media/export;
+- TAP playback and C64 TAP v1 recording;
+- supported generic and banked cartridges;
+- PAL MOS 6569 and later-NTSC MOS 6567R8 timing profiles;
+- selectable MOS 6581/8580 SID models and browser AudioWorklet output;
+- debugger/monitor inspection and execution stops;
+- portable motherboard save states and IndexedDB session restoration.
 
-Sector geometry follows the 1541 zones used by standard D64 images:
+## v1.0 hardening changes
 
-- tracks 1-17: 21 sectors/track;
-- tracks 18-24: 19 sectors/track;
-- tracks 25-30: 18 sectors/track;
-- tracks 31 onward: 17 sectors/track.
+### Release metadata and gate
 
-The parser copies the supplied image, exposes immutable geometry/header/directory metadata, returns copies for public raw-sector reads, and keeps the optional one-byte-per-sector error table separate from disk data.
+- `package.json` is version `1.0.0`.
+- `src/release.ts` is the browser-visible release metadata authority.
+- `npm run check` performs build plus the complete Vitest suite.
+- `npm run release:check` additionally runs `scripts/release-audit.mjs`.
+- The release audit checks package/release/documentation version consistency, rejects pre-1.0 milestone prose in Markdown/README files, verifies key release usage sections, and confirms every TypeScript-bearing `src/core` directory has a README.
 
-The directory traversal begins at track 18 sector 1 and follows link bytes, with loop detection and track/sector bounds checks. File extraction also follows linked sectors with loop detection. Non-final file sectors contribute 254 bytes; on a final sector the second link byte is interpreted as the last used byte position, so `$FF` contributes all 254 payload bytes and `$01` contributes zero payload bytes.
+### Release-readiness regression
 
-A PRG is not interpreted by the disk layer. `readPrg()` returns the exact linked file stream including its two-byte little-endian load address and the existing PRG loader remains the single authority for loading it into C64 RAM.
+`tests/release/ReleaseReadiness.test.ts` adds end-to-end smoke coverage for the workflows explicitly required before 1.0:
 
-Reference basis: VICE D64 image-format documentation and the 1541-compatible sector/directory conventions used by current D64 tooling.
+1. published release metadata is `1.0.0`;
+2. host key classes needed for a representative BASIC line are accepted and released through the physical keyboard adapter;
+3. a BASIC PRG extracted from D64 loads through `C64Machine.loadPrg()` and initializes BASIC pointers;
+4. a BASIC PRG extracted from T64 follows the same canonical loader path.
 
-## IEC electrical model
+These tests supplement, rather than replace, the dedicated chip/media/drive tests.
 
-`IecBus` models ATN, CLOCK, and DATA as wired-low/open-collector lines. An endpoint can pull a line low or release it; a resolved line is high only when every attached endpoint releases it.
+### Browser audio hardening
 
-CIA2 wiring follows the C64 motherboard connection:
+`SidAudio.createGraph()` now treats AudioWorklet startup as an atomic operation. If module load, node construction, graph connection, or resume fails, partially created nodes are disconnected and the temporary `AudioContext` is closed before the original error is rethrown. A browser audio failure therefore remains recoverable and does not leak an orphaned audio context.
 
-- PA3 -> inverted ATN output;
-- PA4 -> inverted CLOCK output;
-- PA5 -> inverted DATA output;
-- PA6 <- resolved CLOCK input;
-- PA7 <- resolved DATA input.
+### Browser session hardening
 
-Because the motherboard output stages invert PA3-PA5, an output-configured CIA bit value of `1` pulls the corresponding IEC line low. A CIA bit configured as an input does not drive the line.
+`BrowserSessionStore` now handles IndexedDB lifecycle failures explicitly:
 
-`Cia6526` exposes a generic Port-A output-change observer rather than containing IEC knowledge. This guarantees that both CPU-routed writes and direct CIA writes update external motherboard wiring consistently. Reset also emits the observer update, releasing the C64 endpoint without incorrectly releasing another attached peripheral.
+- a blocked database open reports that another open emulator tab is preventing the operation;
+- a failed open clears the cached promise so a later user action can retry;
+- `versionchange` closes the active database handle and clears it for a clean future reopen.
 
-A bus-wide `releaseAll()` keeps both the resolved bus state and each endpoint's local drive state coherent, so an endpoint can immediately reassert the same line afterward.
+The persistence layer remains browser-only and does not enter deterministic core timing.
 
-Reference basis: C64 CIA2/IEC wiring documentation and the C64 service-manual schematic; future drive devices are expected to attach another endpoint to the same bus.
+## Documentation audit
 
-## Host-assisted D64 loading boundary
+Every `README*` and `*.md` file in the repository was reviewed against the v1.0 tree. The audit specifically corrected stale claims including:
 
-The browser UI can mount a D64, display its directory, select PRG entries, and perform either:
+- root documentation identifying an old pre-release version;
+- D64 described as immutable after writable-media support existed;
+- the 1541 described as future work after the true-drive core existed;
+- cartridge GAME/EXROM modes described as future work after they were implemented;
+- subsystem READMEs written as historical milestone notes rather than current behavior;
+- the root verification document still being primarily an early disk/IEC milestone report;
+- the SID manual planning document pointing at an obsolete implementation baseline.
 
-- **Host-assisted Load** — extract the PRG and use the normal C64 PRG loader;
-- **Host-assisted Load + Jump** — same extraction with the existing explicit machine-code jump option.
+The current documentation separates implemented behavior from known accuracy boundaries and includes explicit instructions for typing BASIC programs and using D64/G64 and T64 media.
 
-This path does **not**:
+## Known accuracy boundaries
 
-- execute KERNAL IEC LOAD routines;
-- emulate 1541 DOS;
-- emulate a 6502/VIA drive computer;
-- synthesize fake serial handshakes;
-- support fastloaders;
-- modify the mounted D64.
+v1.0 does not claim the following as exact:
 
-That separation is intentional. The D64 parser provides useful read-only disk-image access now, while `IecBus` provides the physical boundary needed by the next true-drive phase.
+- measured/empirically calibrated SID combined-waveform parity;
+- half-cycle-exact VIC sprite p/s DMA fetch ordering;
+- exact dot-clock border transitions and border-opening tricks;
+- light-pen pin capture and once-per-frame latch timing;
+- half-cycle-exact shared-bus/open-bus phase ordering;
+- sprite crunch and obscure expansion flip-flop tricks;
+- 6567R56A and deeper VIC revision-specific timing;
+- transistor/op-amp-level 6581 filter calibration and per-chip variation;
+- exact SID POT RC timing and analog noise/distortion floor;
+- host-assisted SAVE/REL/SEQ/BAM filesystem creation helpers;
+- chip-specific unstable XAA/LXA/AHX/TAS/SHX/SHY behavior;
+- BRK/IRQ vector hijacking and remaining interrupt races;
+- reset-pin micro-sequencing;
+- analog 1541 PLL/weak-bit/magnetic-transition behavior and every copy-protection scheme;
+- active expansion-port DMA bus stealing or arbitrary freezer-cartridge hardware.
 
-## Public-image format cross-check
+Those limits are explicit compatibility boundaries, not hidden shortcuts.
 
-During implementation, the parser assumptions were independently checked against the public `dirien/c64-demo` D64 image. The image is a standard 174,848-byte 35-track D64 whose BAM/directory data identifies:
+## Required local release gate
 
-```text
-Disk label: DEMO DISK
-Disk ID:    01
-DOS type:   2A
-Entry:      DEMO
-Type byte:  $82 (closed PRG)
-Start:      track 1, sector 0
-Blocks:     7
-Final link: track 0, byte-position 222
-```
-
-The seven-sector chain and final-sector marker are consistent with the same linked-file rules exercised by the synthetic unit tests. The repository's current standalone `demo.prg` is a different revision/size, so no byte-for-byte PRG identity claim is made.
-
-## Existing emulator core retained
-
-The v0.9 compatibility work is intentionally untouched where this phase does not need it. The CPU, VIC-II, SID implementation, machine timing profiles, undocumented-opcode behavior, and raster timing remain the v0.9 baseline. v0.10 changes CIA only to provide the generic output-observer hook required by physical IEC wiring.
-
-## Static verification
-
-The complete source and test tree is type-checked in strict mode using the locally available TypeScript compiler plus verification-only ambient declarations for unavailable Vitest/Vite/Node packages. Those declarations are not part of the project or patch.
-
-Result: **PASS**
-
-## Normal regression suite
-
-The compiled normal regression includes all previous CPU, memory, CIA, VIC-II, sprite, SID, ROM, host-input, PRG, debugger, and machine tests plus v0.10 coverage for:
-
-- all supported D64 sizes and error-table variants;
-- D64 track/sector bounds;
-- BAM/header metadata;
-- linked directory traversal;
-- closed/locked/type flags;
-- typed zero-block entries;
-- multi-sector PRG extraction;
-- full final sectors using `$FF`;
-- invalid file types and malformed/looping chains;
-- PETSCII filename display conversion;
-- IEC wired-low resolution across multiple endpoints;
-- endpoint detach and bus-wide release consistency;
-- CIA2 output inversion and DDR behavior;
-- resolved IEC input levels on PA6/PA7;
-- direct CIA2 register writes updating IEC;
-- reset releasing only the C64 endpoint;
-- full CPU-visible `$DD00/$DD02` integration through `C64Bus`.
-
-Pre-packaging result:
-
-```text
-184 passed
-0 failed
-```
-
-The optional Klaus Dormann test remains separate because `tests/assets/6502_functional_test.bin` is not redistributed with the project.
-
-The final generated patch is applied to a fresh exact v0.9 tree and the complete normal regression is rerun from that freshly patched tree. Artifact results are recorded in `V0.10-PATCH-VERIFICATION.txt`.
-
-## Package-manager limitation
-
-This execution environment cannot reliably reach the npm registry, so the real installed Vite/Vitest dependency tree is not available here. Verification therefore uses strict TypeScript plus an independent compiled test runner. The generated patch itself is then applied to a fresh tree and retested.
-
-After applying locally, run:
+Run from the project root after applying the patch:
 
 ```bash
-npm run build
-npm run test
+npm run release:check
 ```
 
-With the optional Klaus binary absent, local Vitest is expected to report 184 passed and 1 skipped.
+The optional Klaus Dormann functional test remains skipped when `tests/assets/6502_functional_test.bin` is absent and runs automatically when the user supplies that external binary.
 
+## Patch-generation verification
 
-## v0.16 user-facing completeness verification
+The generated release patch is validated by applying it to a fresh copy of the successful post-readiness tree with:
 
-The v0.16 milestone adds portable save states, browser-persistent session assets, configurable PAL/NTSC construction, and persisted 6581/8580 selection. Save states are deliberately captured only at a C64 6510 instruction boundary. Motherboard state is serialized deeply; independent 1541 CPU/VIA microstate is not fabricated and is reset during restore while mounted media/head position remain attached.
+```bash
+patch -p1 --dry-run --forward --batch --no-backup-if-mismatch < PATCH
+patch -p1 --forward --batch --no-backup-if-mismatch < PATCH
+```
 
-Verification performed for this patch includes strict TypeScript compilation of the complete core, session codec/store, browser main UI, 1541 UI, expansion/tape UI, input adapter, and audio adapter using only a verification-only Vite URL declaration; strict compilation of all ordinary tests except the optional Klaus Node-file harness using verification-only Vitest declarations; and an independent compiled runtime harness covering NTSC+8580 construction, deep motherboard state restore, portable binary-state encoding, and cross-standard state rejection.
+The patched tree must match the intended v1.0 target byte-for-byte, contain no `.rej`/`.orig` files, pass whitespace checks, pass the documentation audit, and pass strict TypeScript/runtime smoke verification available in the artifact environment. The user's installed Vite/Vitest toolchain remains the authoritative final integration gate.

@@ -4,9 +4,9 @@
 
 This directory contains the MOS VIC-II video core. It owns raster timing, CPU-visible VIC registers, raster IRQs, the independent 14-bit VIC memory view, the text/bitmap graphics sequencer, hardware sprites, collision latches, and VIC/6510 bus arbitration.
 
-Version 0.6 moves pixels onto the timed memory pipeline rather than rendering from a frame-time RAM snapshot. Bad-line c-accesses load the internal video/color matrix, per-line g-accesses consume those latches through VC/VCBASE/RC, and the resulting data drives the framebuffer. The same phase adds all five documented display modes and the eight-sprite visual/collision engine.
+Pixels are generated from the timed memory pipeline rather than a frame-time RAM snapshot. Bad-line c-accesses load the internal video/color matrix, per-line g-accesses consume those latches through VC/VCBASE/RC, and the resulting data drives the framebuffer. All five documented display modes and the eight-sprite visual/collision engine share that pipeline.
 
-The default profile is PAL MOS 6569: 63 system cycles per raster line and 312 lines per frame. v0.9 also wires the later NTSC MOS 6567R8 profile end-to-end: 65 cycles per line, 263 lines per frame, the NTSC system clock, and the measured NTSC sprite-pointer/DMA slots. v0.14 hardens register readback masks and the measured 38-column border geometry.
+The default profile is PAL MOS 6569: 63 system cycles per raster line and 312 lines per frame. The later NTSC MOS 6567R8 profile is also wired end-to-end at 65 cycles per line and 263 lines per frame with its system clock and measured sprite-pointer/DMA slots. Register readback masks and the measured asymmetric 38-column border geometry are part of the current model.
 
 ## Architecture
 
@@ -89,9 +89,9 @@ Multicolor foreground/background classification follows VIC priority rules: pair
 
 ### Fine scroll and display window
 
-YSCROLL controls bad-line alignment and therefore the row-counter phase. XSCROLL shifts generated graphics pixels by 0-7 pixels. RSEL selects the 24/25-row vertical display window; CSEL selects the 38/40-column horizontal window. v0.14 uses the measured 38-column geometry: compared with 40-column mode the border expands 7 pixels on the left and 9 on the right, rather than symmetrically by 8. Border pixels are kept separate from display pixels so sprites remain hidden by the physical border.
+YSCROLL controls bad-line alignment and therefore the row-counter phase. XSCROLL shifts generated graphics pixels by 0-7 pixels. RSEL selects the 24/25-row vertical display window; CSEL selects the 38/40-column horizontal window. The measured 38-column geometry expands the border 7 pixels on the left and 9 pixels on the right compared with 40-column mode, rather than symmetrically by 8. Border pixels are kept separate from display pixels so sprites remain hidden by the physical border.
 
-This is a cycle-level, not dot-clock-level, model. Mid-cycle border opening tricks and exact 8-dot horizontal transition positions remain later compatibility work.
+This is a cycle-level, not dot-clock-level, model. Mid-cycle border opening tricks and exact 8-dot horizontal transition positions remain post-1.0 compatibility work.
 
 ### Hardware sprites
 

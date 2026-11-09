@@ -1,16 +1,18 @@
 {
   "name": "c64-browser-emulator",
-  "version": "0.16.0",
+  "version": "1.0.0",
   "private": true,
   "type": "module",
-  "description": "From-scratch browser Commodore 64 emulator \u2014 cycle-stepped core with true-drive peripherals, save states, persistent sessions, PAL/NTSC profiles, and selectable 6581/8580 SID",
+  "description": "From-scratch browser Commodore 64 emulator \u2014 cycle-stepped core with true-drive D64/G64, T64/PRG loading, TAP playback/recording, save states, persistent sessions, PAL/NTSC profiles, and selectable 6581/8580 SID",
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:ui": "vitest --ui"
+    "test:ui": "vitest --ui",
+    "check": "npm run build && npm run test",
+    "release:check": "npm run check && node scripts/release-audit.mjs"
   },
   "devDependencies": {
     "@types/node": "^26.2.0",

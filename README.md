@@ -2,7 +2,7 @@
 
 A from-scratch Commodore 64 emulator written in TypeScript for the browser.
 
-Version **0.14.0** hardens timing-sensitive CIA/VIC behavior for real software compatibility. The old-6526 timer pipeline now models delayed START/count/load state, synchronized CNT clocks, the reset-high CNT pin, and the one-PHI2 interrupt latch delay; VIC-II readback masks and the measured asymmetric 38-column display window now match hardware behavior more closely. The v0.13 machine monitor remains fully integrated for inspecting these timing changes.
+Version **1.0.0** is the first release milestone of the browser emulator. It combines the cycle-stepped 6510/CIA/VIC/SID motherboard, firmware-driven 1541/IEC disk path, writable D64/G64 media, PRG/T64 host-assisted loading, TAP playback/recording, banked cartridges, debugger/monitor, save states, persistent browser sessions, and selectable PAL/NTSC plus 6581/8580 profiles. The v1.0 release hardening pass also adds an explicit release audit, end-to-end BASIC/D64/T64 smoke coverage, safer browser-session reopening, and AudioWorklet startup cleanup.
 
 ## Current Capabilities
 
@@ -97,11 +97,22 @@ Version **0.14.0** hardens timing-sensitive CIA/VIC behavior for real software c
 - loop- and bounds-safe linked file extraction
 - PRG extraction retains the native two-byte load-address header
 - browser directory browser and host-assisted PRG load/jump workflow
-- open-collector serial IEC ATN/CLOCK/DATA bus abstraction
+- open-collector serial IEC ATN/CLOCK/DATA/RESET bus abstraction
 - real C64 CIA2 PA3/PA4/PA5 inverted output wiring
 - real CIA2 PA6/PA7 CLOCK/DATA input feedback
 - G64 v0 raw-GCR full/half-track images with constant or per-byte speed zones
 - explicit separation between host-assisted D64 access and firmware-driven IEC traffic
+
+
+### T64 Tape Containers
+
+- legacy C64S/VICE `.T64` header and directory parsing
+- normal tape-file (`entry type 1`) PRG extraction
+- multi-entry browser selection
+- host-assisted BASIC load or explicit machine-code load+jump
+- compatibility fallback for the historical conv64 bogus `$C3C6` end-address pattern
+- session persistence and automatic T64 restoration
+- intentionally separate from TAP: T64 is a host-side file container, while TAP drives the cycle-timed Datasette signal path
 
 ### Commodore 1541 True Drive
 
@@ -149,6 +160,9 @@ Version **0.14.0** hardens timing-sensitive CIA/VIC behavior for real software c
 - both C64 shift keys, cursor keys, function keys, punctuation, and common printable keys
 - joystick capture selector for control port 1 or 2
 - debugger Step / Run 100 / Run Frame controls remain available while paused
+- quick save/load plus portable `.c64state` import/export
+- IndexedDB persistence for ROMs, mounted media, preferences, and quick state
+- PAL/NTSC and 6581/8580 selection persisted across browser sessions
 
 ### MOS 6581 / 8580 SID
 
@@ -167,22 +181,6 @@ Version **0.14.0** hardens timing-sensitive CIA/VIC behavior for real software c
 - POTX/POTY, OSC3, and ENV3 readable registers
 - deterministic PCM decimation and browser AudioWorklet output
 - browser-selectable 6581/8580 model and mute/resume controls
-
-## Still Intentionally Deferred
-
-- measured/empirically calibrated combined-waveform parity
-- half-cycle-exact sprite p/s DMA fetch ordering
-- exact dot-clock border transitions and border-opening tricks
-- light-pen pin capture and once-per-frame latch timing
-- half-cycle-exact shared-bus/open-bus phase ordering
-- sprite crunch and obscure expansion flip-flop tricks
-- older 6567R56A NTSC profile and deeper per-revision VIC timing
-- full transistor/op-amp-level 6581 filter calibration and per-chip variation
-- exact SID POT RC conversion timing and analog noise/distortion floor
-- host-assisted SAVE/REL/SEQ creation and DOS-level BAM allocation helpers
-- chip-specific modeling for unstable XAA/LXA/AHX/TAS/SHX/SHY opcodes
-- BRK/IRQ vector hijacking and the remaining interrupt race edge cases
-- reset-pin micro-sequencing
 
 ## Requirements
 
@@ -206,9 +204,21 @@ No Commodore ROM images are included in this repository.
 
 After loading all three ROMs, click **Power On**. The machine starts at the real KERNAL reset vector and runs continuously. Click the C64 display to give it keyboard focus.
 
-For a BASIC `.PRG`, wait until the ROM reaches `READY.`, load the file, then type `RUN`. Use **Load + Jump to Address** only for machine-code files whose entry point is intentionally the PRG load address.
+### Enter BASIC programs
 
-A `.D64` may also be mounted in the browser. Its directory is parsed from the image and PRG files can be sent through the same loader using **Host-assisted Load**. That convenience path is deliberately labeled: it does not yet emulate the 1541 CPU or transfer bytes through IEC.
+Wait for the normal Commodore BASIC `READY.` prompt, click the display, and type program lines exactly as on a C64. The browser input adapter drives the physical CIA1 keyboard matrix rather than injecting text. `RUN`, `LIST`, editing keys, quotes, colon, cursor keys, function keys, RUN/STOP, Commodore, and both shift-key paths are represented.
+
+For a BASIC `.PRG`, load the file after `READY.` and type `RUN`. Use **Load + Jump to Address** only for machine-code files whose entry point is intentionally the PRG load address.
+
+### D64 / G64 disk games
+
+A `.D64` can be mounted and browsed immediately; a PRG entry can be sent through **Host-assisted Load** for convenience. For normal multi-file games and software that talks to the drive, supply a 16 KiB 1541 DOS ROM and use the firmware-driven 1541/IEC path from BASIC/KERNAL (`LOAD`, directory commands, and software loaders). Writable D64 media is committed back to sectors and can be exported. G64 is the raw-GCR path for full/half tracks and variable speed zones.
+
+The true-drive path is intentionally preferred for software that depends on 1541 behavior. Very aggressive copy protection can still depend on analog PLL/weak-bit behavior beyond the v1.0 accuracy boundary.
+
+### T64
+
+Open a `.T64` in the T64 panel, select a normal PRG entry, and use **Host-assisted Load**. BASIC entries at `$0801` update BASIC pointers and can then be started with `RUN`. **Load + Jump** is an explicit convenience for machine-code entries whose entry point is their load address. T64 is a file container rather than pulse timing, so `.TAP` remains the physical Datasette path.
 
 ## Build
 
@@ -234,83 +244,98 @@ The Klaus Dormann functional test remains optional. If you possess the 64 KiB `6
 tests/assets/6502_functional_test.bin
 ```
 
-## v0.16 Architecture
+## v1.0 Architecture
 
 ```text
 Browser adapters + persistent session
- ROM / PRG / disk   keyboard / joystick / RESTORE   save state / frame pacing
-     \             |                            /
-      \            |                           /
-       +-------------+--------------------------+
-                     |
-                     v
-              +-------------+
-              | C64Machine  |
-              | master tick |
-              +------+------+
-                     |
-        +------------+-------------+
-        |            |             |
-      Cpu6510      VIC-II       CIA1/CIA2
-        |          BA/AEC          |     |
-        +------------+-------------+     +--> IEC ATN/CLK/DATA
-                     |
-                   C64Bus
-                  /      \
-                RAM      SID 6581/8580
-                 ^          |
-                 |       voices + ADSR + filter
-          host-assisted     |
-          D64/PRG load   deterministic PCM
-                            |
-                 browser SidAudio adapter
-                            |
-                        AudioWorklet
+ ROM / PRG / T64 / media   keyboard / joystick / RESTORE   state / frame pacing
+          \                         |                         /
+           +-------------------------+------------------------+
+                                     |
+                                     v
+                              +-------------+
+                              | C64Machine  |
+                              | master tick |
+                              +------+------+
+                                     |
+               +---------------------+----------------------+
+               |                     |                      |
+            Cpu6510                VIC-II               CIA1/CIA2
+               |                   BA/AEC                   |
+               +---------------------+----------------------+
+                                     |                      \n                                   C64Bus                    +--> IEC bus <--> 1541 CPU/VIAs <--> D64/G64
+                              /       |       \n                            RAM      SID      expansion/cartridge
+                                     |
+                              deterministic PCM
+                                     |
+                              SidAudio / AudioWorklet
+
+Datasette TAP playback/recording and host-assisted PRG/T64/D64 loading remain
+separate paths around the same deterministic motherboard core.
 ```
 
 ## Documentation Rule
 
-Every directory under `src/core/` contains its own `README.md` with:
+Every browser-independent hardware directory under `src/core/` is documented with current architecture and accuracy boundaries. Release documentation is intentionally written as current-state documentation rather than a history of old milestones.
 
-- Overview
-- Architecture
-- Implementation Discussion
+Current documentation includes:
 
-Current core documentation:
-
-- `src/core/README.md`
+- `README.md` — release capabilities, usage, and accuracy boundaries
+- `VERIFICATION.md` — v1.0 verification and release gates
+- `src/core/README.md` — core architecture
 - `src/core/cpu/README.md`
-- `src/core/debugger/README.md`
 - `src/core/memory/README.md`
 - `src/core/rom/README.md`
 - `src/core/io/README.md`
 - `src/core/machine/README.md`
 - `src/core/cia/README.md`
+- `src/core/via/README.md`
 - `src/core/vic/README.md`
-- `src/core/program/README.md`
 - `src/core/sid/README.md`
-- `src/core/sid/SID_API_REFERENCE_MANUAL_V1.md` (planning/TOC appendix)
+- `src/core/cartridge/README.md`
+- `src/core/disk/README.md`
+- `src/core/drive1541/README.md`
+- `src/core/iec/README.md`
+- `src/core/program/README.md`
+- `src/core/tape/README.md`
+- `src/core/debugger/README.md`
+- `src/audio/README.md` — browser SID output bridge
+- `src/input/README.md` — browser input adapter
+- `src/session/README.md` — browser persistence/save-state boundary
+- `tests/assets/README.md` — optional external regression assets
+- `src/core/sid/SID_API_REFERENCE_MANUAL_V1.md` — SID reference-manual plan aligned to the v1.0 implementation
 
-The host-only input adapter is separately documented in `src/input/README.md`.
+## v1.0 Release Scope
 
-## Roadmap
+The v1.0 support target is a usable browser C64 for ordinary BASIC development and a broad class of real software: keyboard/joystick input, ROM boot, PRG/T64 host loading, D64/G64 through the 1541 path, TAP playback/recording, supported cartridges, SID audio, debugging, and persistent sessions/save states. Unknown or unimplemented hardware behavior is not silently fabricated.
 
-### v0.16 — User-facing completeness
+The release gate is:
 
-- instruction-boundary C64 motherboard save states with portable `.c64state` export/import
-- quick-save/quick-load persisted in IndexedDB
-- automatic browser-session restoration for motherboard ROMs, 1541 ROM, PRG, disk, cartridge, and tape attachments
-- PAL-B/MOS 6569 and NTSC-M/MOS 6567R8 machine profiles
-- independent MOS 6581 / MOS 8580 SID selection persisted with the session
-- restored VIC raster/sequencer/framebuffer, CIA pipeline/TOD/IRQ, SID oscillator/envelope/filter, Datasette, RAM/color RAM, CPU, processor-port, and cartridge-bank state
-- 1541 electronics deliberately reset on save-state restore because the drive CPU can be mid-microcycle when the C64 is at an instruction boundary; mounted media/head position are preserved
+```bash
+npm run release:check
+```
 
-### Later / v1.0 hardening
+That command performs the TypeScript/Vite build, the complete Vitest regression suite, and a documentation/version audit.
 
-- deeper CPU/VIC half-cycle edge-case accuracy and broader VICE compatibility suites
-- additional copy-protection/PLL behavior and fast-loader compatibility hardening
-- concrete freezer cartridge families and additional banked cartridge hardware
-- performance profiling, AudioWorklet stabilization, regression expansion, packaging, and release documentation
+## Known accuracy boundaries
+
+The following remain intentionally outside the v1.0 compatibility claim and are candidates for post-1.0 work:
+
+- measured/empirically calibrated SID combined-waveform parity
+- half-cycle-exact sprite p/s DMA fetch ordering
+- exact dot-clock border transitions and border-opening tricks
+- light-pen pin capture and once-per-frame latch timing
+- half-cycle-exact shared-bus/open-bus phase ordering
+- sprite crunch and obscure expansion flip-flop tricks
+- older 6567R56A NTSC profile and deeper per-revision VIC timing
+- transistor/op-amp-level 6581 filter calibration and per-chip variation
+- exact SID POT RC conversion timing and analog noise/distortion floor
+- host-assisted SAVE/REL/SEQ creation and DOS-level BAM allocation helpers
+- chip-specific unstable XAA/LXA/AHX/TAS/SHX/SHY behavior
+- BRK/IRQ vector hijacking and remaining interrupt race edge cases
+- reset-pin micro-sequencing
+- exact analog 1541 PLL/weak-bit/magnetic-transition behavior and every copy-protection scheme
+- active expansion-port DMA bus stealing and chip-specific freezer cartridges beyond the existing electrical hooks
 
 ## Design Rules
 

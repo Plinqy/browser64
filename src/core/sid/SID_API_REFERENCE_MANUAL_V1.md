@@ -2,7 +2,7 @@
 
 **Status:** Planning / table of contents only
 **Manual version:** v1 planning draft
-**Implementation baseline:** emulator v0.8
+**Implementation baseline:** emulator v1.0
 
 ## Purpose of v1
 

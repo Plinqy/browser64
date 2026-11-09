@@ -2,7 +2,7 @@
 
 ## Overview
 
-`src/core/program` contains browser-independent program-container parsing. Version 0.7 starts with the native Commodore `.PRG` format: two little-endian bytes specify the destination address and every remaining byte is copied into C64 RAM.
+`src/core/program` contains browser-independent parsing for the native Commodore `.PRG` load container: two little-endian bytes specify the destination address and every remaining byte is copied into C64 RAM.
 
 The parser deliberately does not know about file pickers, drag/drop, MIME types, or browser APIs. Those concerns remain in the host layer.
 
@@ -46,6 +46,6 @@ When a PRG loads at `$0801`, the machine helper sets `TXTTAB` (`$2B/$2C`) to `$0
 
 PRG bytes are written to physical RAM. This is intentional: a load operation can place bytes underneath currently visible ROM, just as C64 RAM physically exists beneath banked ROM regions. CPU visibility after loading still obeys `$0001` banking.
 
-### D64 integration
+### D64 and T64 integration
 
-Version 0.10 does not add disk-format concerns to `parsePrg()`. `D64Image.readPrg()` extracts the exact PRG file bytes, including the two-byte load address, and the caller then uses the same parser/machine loading path described above. This keeps container semantics composable and avoids coupling PRG loading to a future 1541 implementation.
+Disk/tape-container concerns do not enter `parsePrg()`. `D64Image.readPrg()` and `T64Image.readPrg()` both produce canonical PRG bytes including the two-byte load address, and callers use the same parser/machine loading path described above. The firmware-driven 1541/IEC path is separate and does not depend on host-assisted PRG extraction.

@@ -15,6 +15,7 @@ export type PersistedAssetKind =
   | 'disk-1541'
   | 'cartridge'
   | 'tape'
+  | 't64'
   | 'prg';
 
 export interface SessionPreferences {
@@ -26,7 +27,7 @@ export interface SessionPreferences {
 export interface PersistedAsset {
   readonly name: string;
   readonly bytes: Uint8Array;
-  readonly mediaType?: 'd64' | 'g64' | 'crt' | 'raw' | 'tap' | 'prg' | 'rom';
+  readonly mediaType?: 'd64' | 'g64' | 'crt' | 'raw' | 'tap' | 't64' | 'prg' | 'rom';
   readonly writeProtected?: boolean;
   readonly rawCartridgeMode?: RawCartridgeMode;
 }
@@ -71,7 +72,7 @@ export class BrowserSessionStore {
     const preferences = await this.loadPreferences();
     const kinds: readonly PersistedAssetKind[] = [
       'rom-basic', 'rom-kernal', 'rom-character', 'rom-1541',
-      'disk-1541', 'cartridge', 'tape', 'prg'
+      'disk-1541', 'cartridge', 'tape', 't64', 'prg'
     ];
     const values = await Promise.all(kinds.map(async (kind) => [kind, await this.loadAsset(kind)] as const));
     const assets: Partial<Record<PersistedAssetKind, PersistedAsset>> = {};
@@ -114,16 +115,30 @@ export class BrowserSessionStore {
 
   private database(): Promise<IDBDatabase> {
     if (this.databasePromise !== null) return this.databasePromise;
-    this.databasePromise = new Promise<IDBDatabase>((resolve, reject) => {
+
+    const promise = new Promise<IDBDatabase>((resolve, reject) => {
       const request = indexedDB.open(DATABASE_NAME, DATABASE_VERSION);
       request.onerror = () => reject(request.error ?? new Error('Unable to open browser session storage.'));
+      request.onblocked = () => reject(new Error('Browser session storage is blocked by another open emulator tab.'));
       request.onupgradeneeded = () => {
         const database = request.result;
         if (!database.objectStoreNames.contains(STORE_NAME)) database.createObjectStore(STORE_NAME);
       };
-      request.onsuccess = () => resolve(request.result);
+      request.onsuccess = () => {
+        const database = request.result;
+        database.onversionchange = () => {
+          database.close();
+          if (this.databasePromise === promise) this.databasePromise = null;
+        };
+        resolve(database);
+      };
     });
-    return this.databasePromise;
+
+    this.databasePromise = promise;
+    void promise.catch(() => {
+      if (this.databasePromise === promise) this.databasePromise = null;
+    });
+    return promise;
   }
 }
 

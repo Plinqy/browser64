@@ -2,7 +2,7 @@
 
 ## Overview
 
-`src/core/iec` models the open-collector serial bus shared by the C64 and peripherals. v0.11 extends the v0.10 ATN/CLOCK/DATA foundation with RESET and connects an actual firmware-driven 1541 endpoint to the same bus used by CIA2.
+`src/core/iec` models the open-collector ATN/CLOCK/DATA/RESET serial bus shared by the C64 and peripherals. The C64 CIA2 endpoint and firmware-driven 1541 endpoint are connected to the same resolved electrical lines.
 
 Host-assisted D64 PRG loading remains available as an explicit convenience feature, but it is separate from true-drive execution and never masquerades as IEC traffic.
 
@@ -36,7 +36,7 @@ CIA2 PA3/PA4/PA5 retain the C64 motherboard's inverted ATN/CLOCK/DATA outputs. T
 
 ### Host-assisted versus true-drive disk access
 
-`D64Image` extraction is still useful for instant browser-side PRG loading, but v0.11 adds an entirely separate path: `C1541Drive` runs a 1541 ROM on its own CPU and VIAs, reads a GCR media stream, and communicates over `IecBus`. Fast loaders therefore have an architectural path to work by executing their real C64/1541 code rather than by teaching the host loader special cases.
+`D64Image` extraction is useful for instant browser-side PRG loading, but the true-drive path is entirely separate: `C1541Drive` runs a 1541 ROM on its own CPU and VIAs, reads/writes the GCR mechanism, and communicates over `IecBus`. Fast loaders therefore have an architectural path to work by executing their real C64/1541 code rather than by teaching the host loader special cases.
 
 ### Deferred line
 

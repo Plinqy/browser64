@@ -68,22 +68,38 @@ export class SidAudio {
 
   private async createGraph(): Promise<void> {
     const context = new AudioContext({ latencyHint: 'interactive' });
-    await context.audioWorklet.addModule(workletUrl);
+    let node: AudioWorkletNode | null = null;
+    let gain: GainNode | null = null;
 
-    const node = new AudioWorkletNode(context, 'c64-sid-output', {
-      numberOfInputs: 0,
-      numberOfOutputs: 1,
-      outputChannelCount: [1]
-    });
-    const gain = context.createGain();
-    gain.gain.value = this.muted ? 0 : 1;
-    node.connect(gain).connect(context.destination);
+    try {
+      await context.audioWorklet.addModule(workletUrl);
 
-    this.context = context;
-    this.node = node;
-    this.gain = gain;
-    this.sid.configureAudio(context.sampleRate);
+      node = new AudioWorkletNode(context, 'c64-sid-output', {
+        numberOfInputs: 0,
+        numberOfOutputs: 1,
+        outputChannelCount: [1]
+      });
+      gain = context.createGain();
+      gain.gain.value = this.muted ? 0 : 1;
+      node.connect(gain).connect(context.destination);
 
-    if (context.state === 'suspended') await context.resume();
+      this.sid.configureAudio(context.sampleRate);
+      if (context.state === 'suspended') await context.resume();
+
+      this.context = context;
+      this.node = node;
+      this.gain = gain;
+    } catch (error) {
+      node?.disconnect();
+      gain?.disconnect();
+      if (context.state !== 'closed') {
+        try {
+          await context.close();
+        } catch {
+          // Preserve the original AudioWorklet/startup error.
+        }
+      }
+      throw error;
+    }
   }
 }

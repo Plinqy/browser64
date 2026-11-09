@@ -66,7 +66,7 @@ Branches schedule the taken-branch dummy cycle and the additional page-cross cyc
 
 ### Stack and interrupts
 
-Stack pushes and pulls occur on explicit bus cycles. BRK, IRQ/NMI, JSR, RTS, and RTI are separately scheduled rather than being collapsed into an atomic helper. v0.9 polls IRQ/NMI at the end of the instruction's penultimate cycle. That reproduces the NMOS one-instruction interrupt-mask latency around CLI/SEI/PLP and lets dynamic branch/page-cross cycles replace an earlier provisional poll. IRQ remains level-sensitive; NMI remains edge-latched. Full BRK/IRQ vector-hijack races remain deferred.
+Stack pushes and pulls occur on explicit bus cycles. BRK, IRQ/NMI, JSR, RTS, and RTI are separately scheduled rather than being collapsed into an atomic helper. IRQ/NMI are polled at the end of the instruction's penultimate cycle, reproducing the NMOS one-instruction interrupt-mask latency around CLI/SEI/PLP while allowing dynamic branch/page-cross cycles to replace an earlier provisional poll. IRQ remains level-sensitive; NMI remains edge-latched. Full BRK/IRQ vector-hijack races remain outside the v1.0 claim.
 
 The reset vector is still initialized atomically by `reset()` and charged as seven CPU cycles. The machine advances the peripherals through those seven reset cycles without executing normal CPU micro-operations. A later deep-timing phase can model reset pin sequencing if compatibility requires it.
 
@@ -76,10 +76,10 @@ ADC and SBC retain the verified NMOS decimal behavior from earlier releases. In 
 
 ### Undocumented opcodes
 
-v0.9 implements the stable NMOS combinations used by real C64 software: SLO/RLA/SRE/RRA, SAX/LAX, DCP/ISC, ANC/ALR/ARR/AXS, LAS, the `$EB` SBC alias, and all multi-byte NOP forms. Read-modify-write combinations retain the NMOS old-value dummy write and their 5–8 cycle addressing sequences. JAM/KIL enters a stopped state that only `reset()` releases.
+The core implements the stable NMOS combinations used by real C64 software: SLO/RLA/SRE/RRA, SAX/LAX, DCP/ISC, ANC/ALR/ARR/AXS, LAS, the `$EB` SBC alias, and all multi-byte NOP forms. Read-modify-write combinations retain the NMOS old-value dummy write and their 5–8 cycle addressing sequences. JAM/KIL enters a stopped state that only `reset()` releases.
 
 The temperature/silicon/bus-sensitive XAA, LXA, AHX, TAS, SHX, and SHY family is still decoded for disassembly but throws `UnstableOpcodeError` instead of inventing a magic constant or page-cross result. That is an intentional accuracy boundary, not a missing decoder entry.
 
 ### Host/debugger launch point
 
-`setProgramCounter(address)` is an explicit host/debugger operation used by v0.7 machine-code PRG launching. It clears any partially scheduled micro-operations before changing PC; normal emulated control flow never uses this shortcut.
+`setProgramCounter(address)` is an explicit host/debugger operation used by machine-code PRG/T64 launch actions. It clears any partially scheduled micro-operations before changing PC; normal emulated control flow never uses this shortcut.

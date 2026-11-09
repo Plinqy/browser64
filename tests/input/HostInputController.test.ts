@@ -42,6 +42,20 @@ describe('HostInputController', () => {
     expect(keyboard.isPressed(1, 7)).toBe(true);
   });
 
+  it('maps BASIC punctuation including quotes and colon to real C64 key chords', () => {
+    const { keyboard, controller } = fixture();
+
+    controller.keyDown('QuoteHost', '"');
+    expect(keyboard.isPressed(7, 3)).toBe(true);
+    expect(keyboard.isPressed(1, 7)).toBe(true);
+    controller.keyUp('QuoteHost');
+
+    controller.keyDown('ColonHost', ':');
+    expect(keyboard.isPressed(5, 5)).toBe(true);
+    expect(keyboard.isPressed(1, 7)).toBe(false);
+    controller.keyUp('ColonHost');
+  });
+
   it('uses the C64 PA/PB matrix convention for SPACE and F1', () => {
     const { keyboard, controller } = fixture();
 

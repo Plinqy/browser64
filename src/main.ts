@@ -12,11 +12,14 @@ import {
   VicGraphicsMode,
   parseD64,
   parsePrg,
+  parseT64,
   type C64MachineState,
   type C64RomKind,
   type D64DirectoryEntry,
   type D64Image,
   type MonitorStopReason,
+  type T64DirectoryEntry,
+  type T64Image,
   type RawCartridgeMode,
   type SidChipModel,
   type VicVideoStandard
@@ -25,6 +28,7 @@ import { SidAudio } from './audio/SidAudio';
 import { HostInputController, type JoystickCapturePort } from './input/HostInputController';
 import { browserSessionStore, type RestoredBrowserSession, type SessionPreferences } from './session/BrowserSession';
 import { decodeMachineState, encodeMachineState } from './session/StateCodec';
+import { EMULATOR_RELEASE, EMULATOR_RELEASE_NAME } from './release';
 
 const app = document.querySelector<HTMLElement>('#app');
 if (app === null) {
@@ -41,6 +45,8 @@ let audioError = '';
 let selectedPrg: { name: string; bytes: Uint8Array } | null = null;
 let mountedD64: { name: string; image: D64Image; entries: readonly D64DirectoryEntry[] } | null = null;
 let selectedD64Prg: D64DirectoryEntry | null = null;
+let mountedT64: { name: string; image: T64Image; entries: readonly T64DirectoryEntry[] } | null = null;
+let selectedT64Prg: T64DirectoryEntry | null = null;
 let animationFrame: number | null = null;
 let lastAnimationTime = 0;
 let frameAccumulatorMs = 0;
@@ -51,7 +57,7 @@ app.innerHTML = `
     <header>
       <p class="eyebrow">FROM-SCRATCH C64 EMULATOR</p>
       <h1>Commodore 64 Development Console</h1>
-      <p>v0.16 — user-facing completeness: save states, persistent browser sessions, PAL/NTSC profiles, SID selection, and automatic media restoration.</p>
+      <p>${EMULATOR_RELEASE} — ${EMULATOR_RELEASE_NAME}.</p>
     </header>
 
     <article class="panel rom-panel">
@@ -177,6 +183,28 @@ app.innerHTML = `
       <pre id="d64-directory" class="disk-directory">Mount a D64 to browse its directory.</pre>
     </article>
 
+    <article class="panel t64-panel">
+      <div class="panel-heading">
+        <div>
+          <h2>T64 Tape Container</h2>
+          <p>Browse legacy T64 containers and host-load normal PRG entries. T64 is a file container, not pulse-level Datasette media; use TAP for cycle-timed tape emulation.</p>
+        </div>
+        <div id="t64-status" class="status-pill">No T64 selected</div>
+      </div>
+      <div class="program-controls">
+        <input id="t64-file" type="file" accept=".t64,application/octet-stream" />
+        <label>
+          PRG entry
+          <select id="t64-prg" disabled>
+            <option value="">No PRG available</option>
+          </select>
+        </label>
+        <button id="load-t64-prg" disabled>Host-assisted Load</button>
+        <button id="run-t64-prg" disabled>Host-assisted Load + Jump</button>
+      </div>
+      <pre id="t64-directory" class="disk-directory">Choose a T64 to browse its entries.</pre>
+    </article>
+
     <section class="grid">
       <article class="panel">
         <h2>6510</h2>
@@ -286,6 +314,8 @@ const prgStatusElement = mustElement('prg-status');
 const audioStatusElement = mustElement('audio-status');
 const d64StatusElement = mustElement('d64-status');
 const d64DirectoryElement = mustElement('d64-directory');
+const t64StatusElement = mustElement('t64-status');
+const t64DirectoryElement = mustElement('t64-directory');
 const monitorStatusElement = mustElement('monitor-status');
 const monitorBreakpointsElement = mustElement('monitor-breakpoints');
 const monitorMemoryElement = mustElement('monitor-memory');
@@ -315,6 +345,10 @@ const d64Input = mustInput('d64-file');
 const d64PrgSelect = mustSelect('d64-prg');
 const loadD64PrgButton = mustButton('load-d64-prg');
 const runD64PrgButton = mustButton('run-d64-prg');
+const t64Input = mustInput('t64-file');
+const t64PrgSelect = mustSelect('t64-prg');
+const loadT64PrgButton = mustButton('load-t64-prg');
+const runT64PrgButton = mustButton('run-t64-prg');
 const joystickSelect = mustSelect('joystick-capture');
 const videoStandardSelect = mustSelect('video-standard');
 const sidModelSelect = mustSelect('sid-model');
@@ -517,6 +551,28 @@ d64PrgSelect.addEventListener('change', () => {
 
 loadD64PrgButton.addEventListener('click', () => loadSelectedD64Prg(false));
 runD64PrgButton.addEventListener('click', () => loadSelectedD64Prg(true));
+
+t64Input.addEventListener('change', async () => {
+  const file = t64Input.files?.[0];
+  if (file === undefined) {
+    clearMountedT64();
+    void browserSessionStore.removeAsset('t64');
+    updateControls();
+    return;
+  }
+  await mountT64(file);
+});
+
+t64PrgSelect.addEventListener('change', () => {
+  const selectedIndex = Number.parseInt(t64PrgSelect.value, 10);
+  selectedT64Prg = mountedT64?.entries.find(
+    (entry) => entry.directoryIndex === selectedIndex && entry.loadable && entry.fileType === 'PRG'
+  ) ?? null;
+  updateControls();
+});
+
+loadT64PrgButton.addEventListener('click', () => loadSelectedT64Prg(false));
+runT64PrgButton.addEventListener('click', () => loadSelectedT64Prg(true));
 
 programPanel.addEventListener('dragover', (event) => {
   event.preventDefault();
@@ -742,6 +798,7 @@ document.addEventListener('visibilitychange', () => {
 updateControls();
 updatePrgStatus();
 clearMountedD64();
+clearMountedT64();
 updateInputStatus();
 render();
 sessionReady = restorePersistedSession();
@@ -967,6 +1024,111 @@ function formatD64DirectoryEntry(entry: D64DirectoryEntry): string {
   return `${blocks}  "${entry.filename}" ${entry.fileType}${flags}`;
 }
 
+async function mountT64(file: File): Promise<void> {
+  try {
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    const image = parseT64(bytes);
+    const entries = image.listDirectory();
+    await browserSessionStore.putAsset('t64', { name: file.name, bytes, mediaType: 't64' });
+    mountedT64 = { name: file.name, image, entries };
+    selectedT64Prg = entries.find((entry) => entry.loadable && entry.fileType === 'PRG') ?? null;
+    lastError = '';
+    renderT64Directory();
+  } catch (error) {
+    clearMountedT64();
+    lastError = errorMessage(error);
+  }
+
+  updateControls();
+  render();
+}
+
+function clearMountedT64(): void {
+  mountedT64 = null;
+  selectedT64Prg = null;
+  t64StatusElement.textContent = 'No T64 selected';
+  t64StatusElement.title = '';
+  t64StatusElement.classList.remove('ready');
+  t64DirectoryElement.textContent = 'Choose a T64 to browse its entries.';
+  t64PrgSelect.replaceChildren(new Option('No PRG available', ''));
+  t64PrgSelect.disabled = true;
+}
+
+function renderT64Directory(): void {
+  if (mountedT64 === null) {
+    clearMountedT64();
+    return;
+  }
+
+  const { image, entries, name } = mountedT64;
+  const loadablePrgs = entries.filter((entry) => entry.loadable && entry.fileType === 'PRG');
+  const description = image.header.description === '' ? '(unnamed)' : image.header.description;
+  t64StatusElement.textContent = `${description} · ${entries.length} entries · ${loadablePrgs.length} PRG`;
+  t64StatusElement.title = `${name} · T64 v${formatT64Version(image.header.version)}`;
+  t64StatusElement.classList.add('ready');
+
+  t64DirectoryElement.textContent = entries.length === 0
+    ? 'Directory is empty.'
+    : entries.map((entry) => formatT64DirectoryEntry(entry)).join('\n');
+
+  t64PrgSelect.replaceChildren();
+  if (loadablePrgs.length === 0) {
+    t64PrgSelect.add(new Option('No loadable PRG entries', ''));
+    t64PrgSelect.disabled = true;
+    selectedT64Prg = null;
+    return;
+  }
+
+  for (const entry of loadablePrgs) {
+    t64PrgSelect.add(new Option(
+      `${entry.filename || '(unnamed)'} ($${hex(entry.startAddress, 4)}, ${entry.byteLength} bytes)`,
+      String(entry.directoryIndex)
+    ));
+  }
+  t64PrgSelect.disabled = false;
+  const selected = selectedT64Prg ?? loadablePrgs[0]!;
+  selectedT64Prg = selected;
+  t64PrgSelect.value = String(selected.directoryIndex);
+}
+
+function loadSelectedT64Prg(jumpToLoadAddress: boolean): void {
+  if (!poweredOn || mountedT64 === null || selectedT64Prg === null) return;
+
+  try {
+    const bytes = mountedT64.image.readPrg(selectedT64Prg);
+    const result = machine.loadPrg(bytes);
+    const prefix = `T64 HOST LOAD "${selectedT64Prg.filename}" -> $${hex(result.loadAddress, 4)}-$${hex(result.endAddressExclusive - 1, 4)}`;
+
+    if (jumpToLoadAddress) {
+      machine.startAt(result.loadAddress);
+      traceLines.push(`${prefix}; PC=$${hex(result.loadAddress, 4)}`);
+      setRunning(true);
+    } else {
+      traceLines.push(prefix + (result.basicPointersInitialized ? ' (BASIC pointers updated)' : ''));
+    }
+
+    lastError = '';
+    vicCanvas.focus();
+  } catch (error) {
+    fail(error);
+  }
+
+  updateControls();
+  render();
+}
+
+function formatT64DirectoryEntry(entry: T64DirectoryEntry): string {
+  const range = entry.byteLength === 0
+    ? '$----'
+    : `$${hex(entry.startAddress, 4)}-$${hex(entry.endAddressExclusive - 1, 4)}`;
+  const support = entry.loadable ? '' : ' [unsupported]';
+  return `${String(entry.directoryIndex).padStart(2, '0')}  "${entry.filename}" ${entry.fileType} ${range} ${entry.byteLength} bytes${support}`;
+}
+
+function formatT64Version(version: number): string {
+  return `${(version >>> 8) & 0xff}.${version & 0xff}`;
+}
+
 function createHostInputController(): HostInputController {
   return new HostInputController(machine.bus.io.keyboard, {
     setRestorePressed: (pressed) => machine.setRestorePressed(pressed),
@@ -1033,6 +1195,7 @@ function applySessionAssets(session: RestoredBrowserSession): void {
   const assets = session.assets;
   selectedPrg = null;
   clearMountedD64();
+  clearMountedT64();
 
   for (const kind of ['basic', 'kernal', 'character'] as const) {
     const asset = assets[romAssetKind(kind)];
@@ -1068,6 +1231,15 @@ function applySessionAssets(session: RestoredBrowserSession): void {
 
   const tape = assets.tape;
   if (tape?.mediaType === 'tap') machine.mountTap(tape.bytes, tape.writeProtected ?? false);
+
+  const t64 = assets.t64;
+  if (t64?.mediaType === 't64') {
+    const image = parseT64(t64.bytes);
+    const entries = image.listDirectory();
+    mountedT64 = { name: t64.name, image, entries };
+    selectedT64Prg = entries.find((entry) => entry.loadable && entry.fileType === 'PRG') ?? null;
+    renderT64Directory();
+  }
 
   const prg = assets.prg;
   if (prg?.mediaType === 'prg') selectedPrg = { name: prg.name, bytes: prg.bytes.slice() };
@@ -1498,6 +1670,8 @@ function updateControls(): void {
   runPrgButton.disabled = !poweredOn || selectedPrg === null;
   loadD64PrgButton.disabled = !poweredOn || mountedD64 === null || selectedD64Prg === null;
   runD64PrgButton.disabled = !poweredOn || mountedD64 === null || selectedD64Prg === null;
+  loadT64PrgButton.disabled = !poweredOn || mountedT64 === null || selectedT64Prg === null;
+  runT64PrgButton.disabled = !poweredOn || mountedT64 === null || selectedT64Prg === null;
   monitorApplyRegistersButton.disabled = !poweredOn || running;
   monitorWriteMemoryButton.disabled = !poweredOn || running;
   monitorContinueButton.disabled = !poweredOn || running;

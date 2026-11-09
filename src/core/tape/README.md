@@ -1,8 +1,8 @@
-# Datasette and C64 TAP Media
+# Datasette, C64 TAP Media, and T64 Containers
 
 ## Overview
 
-`src/core/tape` models the Commodore 1530/C2N at the signal boundary the C64 sees. It parses and replays C64 TAP v0/v1 images through CIA1 FLAG and can record the 6510 cassette WRITE signal into cycle-timed TAP v1 media.
+`src/core/tape` models the Commodore 1530/C2N at the signal boundary the C64 sees. It parses and replays C64 TAP v0/v1 images through CIA1 FLAG and can record the 6510 cassette WRITE signal into cycle-timed TAP v1 media. It also parses legacy T64 file containers for explicit host-assisted PRG extraction; T64 never masquerades as pulse-level Datasette media.
 
 ## Architecture
 
@@ -25,3 +25,10 @@ TAP v0 nonzero bytes encode intervals in units of eight C64 cycles; zero is an o
 Recording watches rising edges of the cassette WRITE signal and stores the full-wave interval between those edges as TAP v1. Compact one-byte entries are used when the interval is an exact multiple of eight cycles and fits; otherwise the exact 24-bit form is emitted. Recording can begin part-way through a mounted tape, preserving the prefix before the current position. Blank tapes, write protection, STOP/REWIND finalization, and complete TAP export are supported.
 
 C64 TAP v2 is intentionally rejected: the v2 half-wave extension belongs to the C16/Plus4 tape format rather than C64 TAP media.
+
+
+## T64 Container Boundary
+
+`T64Image` accepts the common C64S/VICE T64 header, lists non-free directory entries, and exposes normal PRG entries as canonical two-byte-load-address PRG streams. Normal entry type 1 is the supported execution path, matching the format subset that is actually common in the wild. Historical files with the known bogus `$C3C6` end address fall back to the physical payload boundary.
+
+T64 is intentionally read-only and host-assisted. A T64 does not encode cassette pulse timing, so feeding it into `Datasette` would invent hardware behavior that is not present in the file. Use TAP for true cassette emulation.

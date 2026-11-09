@@ -2,7 +2,7 @@
 
 ## Overview
 
-`src/core/debugger` provides side-effect-free inspection and execution control for the emulator core. Version 0.13 expands the existing disassembler/trace helpers into a machine monitor with address breakpoints, CPU read/write watchpoints, raster line/cycle stops, editable CPU/RAM state, bounded execution and bus histories, IRQ/NMI history, hardware snapshots, and screen-memory inspection.
+`src/core/debugger` provides side-effect-free inspection and execution control for the emulator core. The v1.0 machine monitor includes address breakpoints, CPU read/write watchpoints, raster line/cycle stops, editable CPU/RAM state, bounded execution and bus histories, IRQ/NMI history, hardware snapshots, and screen-memory inspection.
 
 Files:
 

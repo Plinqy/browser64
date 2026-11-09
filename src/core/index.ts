@@ -87,3 +87,5 @@ export { Datasette, DATASETTE_MOTOR_SPINUP_SECONDS } from './tape/Datasette';
 export type { DatasetteSnapshot, DatasetteState } from './tape/Datasette';
 export { TAP_ZERO_GAP_CYCLES, TapImage, encodeTapPulse, parseTap } from './tape/TapImage';
 export type { TapPulse } from './tape/TapImage';
+export { T64Image, parseT64 } from './tape/T64Image';
+export type { T64CbmFileType, T64DirectoryEntry, T64Header } from './tape/T64Image';
