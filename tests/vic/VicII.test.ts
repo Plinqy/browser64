@@ -148,6 +148,31 @@ describe('VicII standard text rendering', () => {
     expect(frame[activeStart + 1]).toBe(0x00);
   });
 
+  it('retains the completed framebuffer when the raster wraps to the next frame', () => {
+    const bus = new C64Bus();
+    bus.roms.load('character', characterRomWithSinglePixel());
+
+    bus.writePhysicalRam(0x0400, 0x00);
+    bus.io.colorRam.write(0, 0x02);
+    bus.io.vic.write(0x11, 0x1b); // DEN, 25 rows, YSCROLL=3, standard text
+    bus.io.vic.write(0x16, 0x08); // 40-column select, XSCROLL=0, hires text
+    bus.io.vic.write(0x18, 0x14); // screen $0400, chars $1000
+    bus.io.vic.write(0x20, 0x06);
+    bus.io.vic.write(0x21, 0x00);
+
+    const elapsedCycles = 51 * 63 + 16;
+    bus.io.vic.tick(elapsedCycles);
+    const activeStart = VIC_ACTIVE_Y * VIC_FRAMEBUFFER_WIDTH + VIC_ACTIVE_X;
+    expect(bus.io.vic.renderFrame()[activeStart]).toBe(0x02);
+
+    bus.io.vic.tick(bus.io.vic.cyclesPerFrame - elapsedCycles);
+
+    expect(bus.io.vic.frameNumber).toBe(1);
+    expect(bus.io.vic.rasterLine).toBe(0);
+    expect(bus.io.vic.rasterCycle).toBe(1);
+    expect(bus.io.vic.renderFrame()[activeStart]).toBe(0x02);
+  });
+
   it('shows only the border when display enable is clear', () => {
     const bus = new C64Bus();
     bus.io.vic.write(0x11, 0x0b); // RSEL + YSCROLL=3, DEN clear

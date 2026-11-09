@@ -584,7 +584,8 @@ export class VicII implements MemoryMappedDevice {
       this.rcValue = 0;
       this.vmliValue = 0;
       this.displayStateValue = false;
-      this.framebuffer.fill(this.borderColor);
+      // Keep the completed frame available for presentation at raster rollover.
+      // Each visible line of the next frame overwrites its own framebuffer row.
       this.graphicsOpaque.fill(0);
       return;
     }
