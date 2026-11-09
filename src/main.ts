@@ -43,7 +43,7 @@ app.innerHTML = `
     <header>
       <p class="eyebrow">FROM-SCRATCH C64 EMULATOR</p>
       <h1>Commodore 64 Development Console</h1>
-      <p>v0.14 — compatibility hardening: old-6526 timer/IRQ pipeline timing plus VIC-II register readback and 38-column border fidelity.</p>
+      <p>v0.15 — peripheral completeness: writable D64/G64 media, 1541 write path, banked cartridges, expansion interrupt hooks, and C64 TAP v1 recording.</p>
     </header>
 
     <article class="panel rom-panel">

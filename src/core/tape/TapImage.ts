@@ -22,6 +22,10 @@ export class TapImage {
     this.data = data;
   }
 
+  static create(videoStandard = 0): TapImage {
+    return new TapImage(1, 0, videoStandard & 0xff, new Uint8Array(0));
+  }
+
   static parse(bytesLike: ArrayLike<number>): TapImage {
     const bytes = Uint8Array.from(bytesLike, (value) => value & 0xff);
     if (bytes.length < TAP_HEADER_SIZE) {
@@ -56,6 +60,26 @@ export class TapImage {
 
   get byteLength(): number {
     return this.data.length;
+  }
+
+  /** Defensive copy of the raw pulse stream, excluding the 20-byte TAP header. */
+  dataBytes(): Uint8Array { return this.data.slice(); }
+
+  /** Serialize this image as a complete C64 TAP file. */
+  toBytes(): Uint8Array {
+    const output = new Uint8Array(TAP_HEADER_SIZE + this.data.length);
+    for (let index = 0; index < TAP_SIGNATURE.length; index += 1) output[index] = TAP_SIGNATURE.charCodeAt(index);
+    output[0x0c] = this.version;
+    output[0x0d] = this.platform;
+    output[0x0e] = this.videoStandard;
+    writeLe32(output, 0x10, this.data.length);
+    output.set(this.data, TAP_HEADER_SIZE);
+    return output;
+  }
+
+  /** Build a v1 C64 TAP from raw already-encoded pulse bytes. */
+  static fromPulseBytes(data: ArrayLike<number>, videoStandard = 0): TapImage {
+    return new TapImage(1, 0, videoStandard & 0xff, Uint8Array.from(data, (value) => value & 0xff));
   }
 
   /** Timer clock that the TAP pulse counts were recorded against. */
@@ -99,9 +123,25 @@ export function parseTap(bytes: ArrayLike<number>): TapImage {
   return TapImage.parse(bytes);
 }
 
+/** Encode one exact v1 C64 TAP interval in source-clock cycles. */
+export function encodeTapPulse(cycles: number): Uint8Array {
+  if (!Number.isInteger(cycles) || cycles < 1 || cycles > 0xffffff) {
+    throw new RangeError(`TAP v1 pulse must be 1-$FFFFFF cycles; received ${cycles}.`);
+  }
+  if (cycles <= 255 * 8 && cycles % 8 === 0) return Uint8Array.of(cycles / 8);
+  return Uint8Array.of(0, cycles & 0xff, (cycles >> 8) & 0xff, (cycles >> 16) & 0xff);
+}
+
 function le32(bytes: Uint8Array, offset: number): number {
   return ((bytes[offset] ?? 0) |
     ((bytes[offset + 1] ?? 0) << 8) |
     ((bytes[offset + 2] ?? 0) << 16) |
     ((bytes[offset + 3] ?? 0) * 0x01000000)) >>> 0;
+}
+
+function writeLe32(bytes: Uint8Array, offset: number, value: number): void {
+  bytes[offset] = value & 0xff;
+  bytes[offset + 1] = (value >>> 8) & 0xff;
+  bytes[offset + 2] = (value >>> 16) & 0xff;
+  bytes[offset + 3] = (value >>> 24) & 0xff;
 }

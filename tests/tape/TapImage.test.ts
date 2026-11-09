@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { TAP_ZERO_GAP_CYCLES, TapImage } from '../../src/core/tape/TapImage';
+import { TAP_ZERO_GAP_CYCLES, TapImage, encodeTapPulse } from '../../src/core/tape/TapImage';
 
 function tap(version: 0 | 1, data: readonly number[]): Uint8Array {
   const bytes = new Uint8Array(0x14 + data.length);
@@ -31,6 +31,18 @@ describe('TapImage', () => {
   it('uses the compatibility gap for a zero-length v1 extended pulse', () => {
     const image = TapImage.parse(tap(1, [0, 0, 0, 0]));
     expect(image.pulseAt(0)).toEqual({ cycles: TAP_ZERO_GAP_CYCLES, nextOffset: 4 });
+  });
+
+  it('serializes blank/v1 images and encodes compact or exact pulse lengths', () => {
+    expect([...encodeTapPulse(16)]).toEqual([2]);
+    expect([...encodeTapPulse(17)]).toEqual([0, 17, 0, 0]);
+
+    const image = TapImage.fromPulseBytes([...encodeTapPulse(16), ...encodeTapPulse(0x1234)], 0);
+    const reparsed = TapImage.parse(image.toBytes());
+    expect(reparsed.version).toBe(1);
+    expect(reparsed.pulseAt(0)).toEqual({ cycles: 16, nextOffset: 1 });
+    expect(reparsed.pulseAt(1)).toEqual({ cycles: 0x1234, nextOffset: 5 });
+    expect(TapImage.parse(TapImage.create().toBytes()).byteLength).toBe(0);
   });
 
   it('rejects non-C64 and unsupported half-wave TAP images', () => {

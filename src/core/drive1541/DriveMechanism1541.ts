@@ -1,5 +1,6 @@
 import type { D64Image } from '../disk/D64Image';
-import { buildGcrTrack, cyclesPerGcrByte, type GcrTrack } from './Gcr';
+import type { G64Image } from '../disk/G64Image';
+import { buildGcrTrack, cyclesPerGcrByte, decodeGcrTrackToD64, densityForTrack, type GcrTrack } from './Gcr';
 
 export interface DriveMechanismTickResult {
   readonly byteReady: boolean;
@@ -7,45 +8,77 @@ export interface DriveMechanismTickResult {
   readonly syncLow: boolean;
 }
 
+export type DriveMediaKind = 'd64' | 'g64';
+
+export interface ExportedDriveMedia {
+  readonly kind: DriveMediaKind;
+  readonly bytes: Uint8Array;
+}
+
+type MountedMedia =
+  | { readonly kind: 'd64'; readonly image: D64Image }
+  | { readonly kind: 'g64'; readonly image: G64Image };
+
 /**
- * Read-side 1541 spindle/head/gate-array media model.
+ * 1541 spindle/head/gate-array media model with byte-level read/write support.
  *
- * D64 sectors are converted to the byte-level GCR stream a 1541 actually
- * consumes. The spindle advances at density-selected 26/28/30/32 drive
- * cycles per raw byte, and the four-phase stepper moves in half-track units.
- * D64 media is intentionally write-protected in v0.11; write-side flux and
- * G64 preservation are a later compatibility phase.
+ * D64 sectors are expanded into standard GCR tracks. Writes mutate that raw
+ * stream and valid standard sectors are decoded back into the D64 on read-mode
+ * transitions/export/eject. G64 tracks stay raw, including half-tracks and
+ * non-standard byte patterns, so custom formats survive export unchanged.
  */
 export class DriveMechanism1541 {
-  private image: D64Image | null = null;
-  private readonly trackCache = new Map<number, GcrTrack>();
+  private media: MountedMedia | null = null;
+  private readonly trackCache = new Map<string, GcrTrack>();
+  private readonly dirtyD64Tracks = new Set<number>();
   private halfTrackPosition = 35; // Track 18: full tracks are odd half-track positions.
   private stepperPhase = 0;
   private motorEnabled = false;
   private activity = false;
   private density: 0 | 1 | 2 | 3 = 2;
   private readMode = true;
-  private byteReadyEnabled = true;
+  private overflowEnabledValue = true;
+  private mediaModified = false;
+  private writeProtectedValue = false;
+  private writeDataByte = 0x55;
   private byteIndex = 0;
   private byteCountdown = 1;
   private currentByteValue = 0x55;
   private currentSyncLow = false;
 
-  mount(image: D64Image): void {
-    this.image = image;
-    this.trackCache.clear();
-    this.byteIndex = 0;
-    this.byteCountdown = 1;
-    this.refreshCurrentByte();
+  mount(image: D64Image, writeProtected = false): void {
+    this.commitDirtyD64Tracks();
+    this.media = { kind: 'd64', image };
+    this.writeProtectedValue = writeProtected;
+    this.resetMediaPosition();
+  }
+
+  mountG64(image: G64Image, writeProtected = false): void {
+    this.commitDirtyD64Tracks();
+    this.media = { kind: 'g64', image };
+    this.writeProtectedValue = writeProtected;
+    this.resetMediaPosition();
   }
 
   eject(): void {
-    this.image = null;
+    this.commitDirtyD64Tracks();
+    this.media = null;
     this.trackCache.clear();
+    this.dirtyD64Tracks.clear();
+    this.mediaModified = false;
     this.byteIndex = 0;
     this.byteCountdown = 1;
     this.currentByteValue = 0x55;
     this.currentSyncLow = false;
+  }
+
+  exportMountedMedia(): ExportedDriveMedia | null {
+    this.commitDirtyD64Tracks();
+    if (this.media === null) return null;
+    return {
+      kind: this.media.kind,
+      bytes: this.media.image.toBytes()
+    };
   }
 
   resetElectronics(): void {
@@ -53,7 +86,7 @@ export class DriveMechanism1541 {
     this.activity = false;
     this.density = 2;
     this.readMode = true;
-    this.byteReadyEnabled = true;
+    this.overflowEnabledValue = true;
     this.stepperPhase = 0;
     this.byteCountdown = 1;
     this.currentSyncLow = false;
@@ -62,12 +95,19 @@ export class DriveMechanism1541 {
   tick(): DriveMechanismTickResult {
     let byteReady = false;
 
-    if (this.motorEnabled && this.image !== null) {
+    if (this.motorEnabled && this.media !== null) {
       this.byteCountdown -= 1;
       if (this.byteCountdown <= 0) {
-        this.advanceByte();
-        this.byteCountdown = cyclesPerGcrByte(this.density);
-        byteReady = this.byteReadyEnabled && this.readMode;
+        if (this.readMode) {
+          this.advanceByte();
+        } else {
+          this.writeCurrentByte();
+          this.advanceByte();
+        }
+        this.byteCountdown = this.cyclesForCurrentByte();
+        // BYTE READY paces both reads and writes. CA2/SOE separately decides
+        // whether it reaches the 6502 overflow input.
+        byteReady = true;
       }
     }
 
@@ -84,22 +124,25 @@ export class DriveMechanism1541 {
     if (enabled) this.byteCountdown = Math.max(1, this.byteCountdown);
   }
 
-  setActivityLed(enabled: boolean): void {
-    this.activity = enabled;
-  }
+  setActivityLed(enabled: boolean): void { this.activity = enabled; }
 
   setDensitySelect(value: number): void {
     this.density = (value & 0x03) as 0 | 1 | 2 | 3;
-    this.byteCountdown = Math.min(this.byteCountdown, cyclesPerGcrByte(this.density));
+    if (this.media?.kind !== 'g64') {
+      this.byteCountdown = Math.min(this.byteCountdown, cyclesPerGcrByte(this.density));
+    }
   }
 
   setReadMode(enabled: boolean): void {
+    if (enabled === this.readMode) return;
+    if (enabled) this.commitDirtyD64Tracks();
     this.readMode = enabled;
   }
 
-  setByteReadyEnabled(enabled: boolean): void {
-    this.byteReadyEnabled = enabled;
-  }
+  /** Backward-compatible name: CA2 controls SOE, not the CA1 BYTE READY pulse itself. */
+  setByteReadyEnabled(enabled: boolean): void { this.overflowEnabledValue = enabled; }
+  setWriteDataByte(value: number): void { this.writeDataByte = value & 0xff; }
+  setWriteProtected(writeProtected: boolean): void { this.writeProtectedValue = writeProtected; }
 
   setStepperPhase(phase: number): void {
     const next = phase & 0x03;
@@ -115,8 +158,12 @@ export class DriveMechanism1541 {
     this.stepperPhase = next;
   }
 
-  get mounted(): boolean { return this.image !== null; }
-  get writeProtected(): boolean { return true; }
+  get mounted(): boolean { return this.media !== null; }
+  get mediaKind(): DriveMediaKind | null { return this.media?.kind ?? null; }
+  get writeProtected(): boolean { return this.writeProtectedValue; }
+  /** True after the mounted image has changed and until new media is mounted/ejected. */
+  get dirty(): boolean { return this.mediaModified; }
+  get overflowEnabled(): boolean { return this.overflowEnabledValue; }
   get motorOn(): boolean { return this.motorEnabled; }
   get activityLedOn(): boolean { return this.activity; }
   get densitySelect(): number { return this.density; }
@@ -124,20 +171,26 @@ export class DriveMechanism1541 {
   get syncAsserted(): boolean { return this.currentSyncLow; }
   get currentHalfTrack(): number { return this.halfTrackPosition; }
   get currentTrack(): number { return Math.max(1, Math.floor((this.halfTrackPosition + 1) / 2)); }
+  get currentTrackPosition(): number { return 1 + (this.halfTrackPosition - 1) / 2; }
+
+  private resetMediaPosition(): void {
+    this.trackCache.clear();
+    this.dirtyD64Tracks.clear();
+    this.mediaModified = false;
+    this.byteIndex = 0;
+    this.byteCountdown = 1;
+    this.refreshCurrentByte();
+  }
 
   private moveHalfTrack(direction: -1 | 1): void {
-    const maxTrack = this.image?.geometry.tracks ?? 42;
-    const maximum = maxTrack * 2 - 1;
-    const previousTrack = this.currentTrack;
-    this.halfTrackPosition = Math.max(1, Math.min(maximum, this.halfTrackPosition + direction));
-    const nextTrack = this.currentTrack;
+    const maximum = this.maximumHalfTrackPosition();
+    const oldPosition = this.halfTrackPosition;
+    const oldTrack = this.getTrackAt(oldPosition);
+    this.halfTrackPosition = Math.max(1, Math.min(maximum, oldPosition + direction));
+    const newTrack = this.getTrackAt(this.halfTrackPosition);
 
-    if (nextTrack !== previousTrack) {
-      // Keep approximate spindle phase when moving between tracks of different
-      // raw lengths rather than snapping to the beginning of the next track.
-      const oldTrack = this.getTrack(previousTrack);
-      const newTrack = this.getTrack(nextTrack);
-      if (oldTrack !== null && newTrack !== null && oldTrack.bytes.length > 0) {
+    if (oldPosition !== this.halfTrackPosition) {
+      if (oldTrack !== null && newTrack !== null && oldTrack.bytes.length > 0 && newTrack.bytes.length > 0) {
         const phase = this.byteIndex / oldTrack.bytes.length;
         this.byteIndex = Math.floor(phase * newTrack.bytes.length) % newTrack.bytes.length;
       } else {
@@ -147,8 +200,14 @@ export class DriveMechanism1541 {
     }
   }
 
+  private maximumHalfTrackPosition(): number {
+    if (this.media?.kind === 'g64') return this.media.image.trackEntryCount;
+    if (this.media?.kind === 'd64') return this.media.image.geometry.tracks * 2 - 1;
+    return 83;
+  }
+
   private advanceByte(): void {
-    const track = this.getTrack(this.currentTrack);
+    const track = this.getTrackAt(this.halfTrackPosition);
     if (track === null || track.bytes.length === 0) {
       this.currentByteValue = 0x55;
       this.currentSyncLow = false;
@@ -160,8 +219,21 @@ export class DriveMechanism1541 {
     this.currentSyncLow = isSyncPosition(track.bytes, this.byteIndex);
   }
 
+  private writeCurrentByte(): void {
+    if (this.writeProtectedValue) return;
+    const track = this.getTrackAt(this.halfTrackPosition);
+    if (track === null || track.bytes.length === 0) return;
+    this.byteIndex %= track.bytes.length;
+    track.bytes[this.byteIndex] = this.writeDataByte;
+    this.currentByteValue = this.writeDataByte;
+    this.currentSyncLow = isSyncPosition(track.bytes, this.byteIndex);
+
+    if (this.media?.kind === 'd64') this.dirtyD64Tracks.add(this.currentTrack);
+    this.mediaModified = true;
+  }
+
   private refreshCurrentByte(): void {
-    const track = this.getTrack(this.currentTrack);
+    const track = this.getTrackAt(this.halfTrackPosition);
     if (track === null || track.bytes.length === 0) {
       this.currentByteValue = 0x55;
       this.currentSyncLow = false;
@@ -172,14 +244,52 @@ export class DriveMechanism1541 {
     this.currentSyncLow = isSyncPosition(track.bytes, this.byteIndex);
   }
 
-  private getTrack(track: number): GcrTrack | null {
-    if (this.image === null || track > this.image.geometry.tracks) return null;
-    let cached = this.trackCache.get(track);
+
+  private cyclesForCurrentByte(): number {
+    if (this.media?.kind === 'g64') {
+      const track = this.media.image.mutableHalfTrack(this.halfTrackPosition);
+      if (track !== null && track.speedZones.length > 0) {
+        const index = this.byteIndex % track.speedZones.length;
+        const zone = (track.speedZones[index] ?? 0) as 0 | 1 | 2 | 3;
+        return cyclesPerGcrByte(zone);
+      }
+    }
+    return cyclesPerGcrByte(this.density);
+  }
+
+  private getTrackAt(position: number): GcrTrack | null {
+    if (this.media === null) return null;
+
+    if (this.media.kind === 'g64') {
+      const raw = this.media.image.mutableHalfTrack(position);
+      if (raw === null) return null;
+      const trackNumber = Math.max(1, Math.min(42, Math.floor(raw.track)));
+      return {
+        track: raw.track,
+        density: densityForTrack(trackNumber),
+        cyclesPerByte: cyclesPerGcrByte(densityForTrack(trackNumber)),
+        bytes: raw.bytes
+      };
+    }
+
+    const trackNumber = Math.max(1, Math.floor((position + 1) / 2));
+    if (trackNumber > this.media.image.geometry.tracks) return null;
+    const key = `d64:${trackNumber}`;
+    let cached = this.trackCache.get(key);
     if (cached === undefined) {
-      cached = buildGcrTrack(this.image, track);
-      this.trackCache.set(track, cached);
+      cached = buildGcrTrack(this.media.image, trackNumber);
+      this.trackCache.set(key, cached);
     }
     return cached;
+  }
+
+  private commitDirtyD64Tracks(): void {
+    if (this.media?.kind !== 'd64' || this.dirtyD64Tracks.size === 0) return;
+    for (const trackNumber of this.dirtyD64Tracks) {
+      const track = this.trackCache.get(`d64:${trackNumber}`);
+      if (track !== undefined) decodeGcrTrackToD64(this.media.image, trackNumber, track.bytes);
+    }
+    this.dirtyD64Tracks.clear();
   }
 }
 

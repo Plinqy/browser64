@@ -87,3 +87,23 @@ describe('C1541Drive IEC and CPU integration', () => {
     expect(drive.cpu.pc).toBe(0xa000);
   });
 });
+
+it('routes VIA1 port A through the write gate into mounted raw media', () => {
+  const drive = new C1541Drive(new IecBus());
+  const raw = new Uint8Array(0x0c + 35 * 8);
+  for (let index = 0; index < 8; index += 1) raw[index] = 'GCR-1541'.charCodeAt(index);
+  raw[0x09] = 35;
+  raw[0x0a] = 1;
+  const image = drive.mountG64(raw);
+  image.replaceHalfTrack(35, Uint8Array.of(0x11, 0x22, 0x33, 0x44), Uint8Array.of(3, 3, 3, 3));
+
+  drive.via1.write(0x03, 0xff); // port A output
+  drive.via1.write(0x01, 0xa5);
+  drive.via1.write(0x02, 0x04); // PB2 motor output
+  drive.via1.write(0x00, 0x04);
+  drive.via1.write(0x0c, 0xc0); // CB2 manual low => write mode
+  drive.tick();
+
+  expect(drive.mechanism.dirty).toBe(true);
+  expect([...image.readHalfTrack(35)!.bytes]).toContain(0xa5);
+});

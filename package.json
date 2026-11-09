@@ -1,9 +1,9 @@
 {
   "name": "c64-browser-emulator",
-  "version": "0.14.0",
+  "version": "0.15.0",
   "private": true,
   "type": "module",
-  "description": "From-scratch browser Commodore 64 emulator — cycle-stepped CPU/VIC/CIA/SID core with true 1541, cartridge/TAP support, machine monitor, and compatibility-hardened CIA/VIC timing",
+  "description": "From-scratch browser Commodore 64 emulator — cycle-stepped CPU/VIC/CIA/SID core with writable D64/G64 1541 media, banked cartridges, TAP recording, machine monitor, and compatibility-hardened CIA/VIC timing",
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",

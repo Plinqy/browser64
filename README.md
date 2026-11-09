@@ -88,9 +88,9 @@ Version **0.14.0** hardens timing-sensitive CIA/VIC behavior for real software c
 
 ### D64 Disk Images and IEC
 
-- standard 35-track D64 images (683 sectors / 174,848 bytes)
+- mutable standard 35-track D64 images (683 sectors / 174,848 bytes)
 - common 40- and 42-track D64 extensions
-- optional one-byte-per-sector D64 error tables
+- optional one-byte-per-sector D64 error tables with writable error codes
 - BAM disk name/ID/DOS metadata
 - linked directory traversal beginning at 18/1
 - DEL/SEQ/PRG/USR/REL type decoding and file flags
@@ -100,7 +100,8 @@ Version **0.14.0** hardens timing-sensitive CIA/VIC behavior for real software c
 - open-collector serial IEC ATN/CLOCK/DATA bus abstraction
 - real C64 CIA2 PA3/PA4/PA5 inverted output wiring
 - real CIA2 PA6/PA7 CLOCK/DATA input feedback
-- explicit separation between host-assisted D64 access and future true-drive IEC traffic
+- G64 v0 raw-GCR full/half-track images with constant or per-byte speed zones
+- explicit separation between host-assisted D64 access and firmware-driven IEC traffic
 
 ### Commodore 1541 True Drive
 
@@ -108,18 +109,22 @@ Version **0.14.0** hardens timing-sensitive CIA/VIC behavior for real software c
 - 2 KiB drive RAM and two MOS 6522 VIA devices
 - user-supplied 16 KiB 1541 DOS ROM
 - shared open-collector IEC ATN/CLOCK/DATA/RESET wiring
-- D64-to-GCR read-side disk mechanism with density zones and half-track stepping
+- writable D64-to-GCR mechanism with sector write-back, density zones, and half-track stepping
+- raw G64 media preserving non-standard GCR data, half-tracks, and per-byte speed zones
+- VIA1 PA write-data path plus BYTE READY/SOE read/write timing
+- browser write-protect control and modified-media export
 - firmware-driven serial traffic rather than KERNAL LOAD traps
 
 ### Cartridges, Expansion Port, and Datasette
 
 - expansion-port device abstraction with GAME/EXROM PLA participation
 - raw 8 KiB, 16 KiB, and Ultimax cartridge images
-- VICE CRT parsing for generic hardware type 0
+- VICE CRT parsing for generic hardware type 0 plus Ocean type 1, C64GS/System 3, Dinamic, and Magic Desk banked cartridges
 - ROML/ROMH mapping, RAM-under-ROM writes, Ultimax open regions, and VIC ROMH visibility
-- IO1/IO2 routing foundation for future banked/freezer hardware
+- IO1/IO2 banking plus expansion IRQ/NMI/DMA and FREEZE hooks
 - Commodore 1530/C2N MOTOR/SENSE/WRITE wiring
 - TAP v0/v1 parsing and cycle-timed CIA1 FLAG playback
+- cycle-timed C64 TAP v1 recording, blank tape creation, write protection, and export
 - PAL/NTSC/old-NTSC/PAL-N source-clock conversion into the active machine clock
 
 ### Machine Monitor
@@ -174,7 +179,7 @@ Version **0.14.0** hardens timing-sensitive CIA/VIC behavior for real software c
 - older 6567R56A NTSC profile and deeper per-revision VIC timing
 - full transistor/op-amp-level 6581 filter calibration and per-chip variation
 - exact SID POT RC conversion timing and analog noise/distortion floor
-- D64 write-back, SAVE, REL/SEQ host operations, and BAM mutation
+- host-assisted SAVE/REL/SEQ creation and DOS-level BAM allocation helpers
 - chip-specific modeling for unstable XAA/LXA/AHX/TAS/SHX/SHY opcodes
 - BRK/IRQ vector hijacking and the remaining interrupt race edge cases
 - reset-pin micro-sequencing
@@ -229,7 +234,7 @@ The Klaus Dormann functional test remains optional. If you possess the 64 KiB `6
 tests/assets/6502_functional_test.bin
 ```
 
-## v0.14 Architecture
+## v0.15 Architecture
 
 ```text
 Browser adapters
@@ -290,21 +295,21 @@ The host-only input adapter is separately documented in `src/input/README.md`.
 
 ## Roadmap
 
-### v0.14 — Hardware fidelity / compatibility hardening
+### v0.15 — Peripheral completeness
 
-- old-6526 timer START/count/load pipeline timing
-- synchronized CNT timer edges and reset-high CNT behavior
-- one-PHI2 delayed CIA master interrupt latch with hardware IMR/ICR semantics
-- VIC-II electrical register readback masks and read-only light-pen registers
-- measured asymmetric 38-column display window
-- focused timing regressions at CIA, VIC, and machine-integration levels
+- writable D64 sector images with GCR write-back and export
+- G64 v0 raw-GCR media with half-tracks and per-byte speed zones
+- 1541 VIA1 write-data/BYTE READY/SOE path
+- Ocean, C64GS/System 3, Dinamic, and Magic Desk CRT banking
+- expansion IRQ/NMI/DMA/FREEZE device hooks
+- cycle-timed C64 TAP v1 recording, blank media, write protection, and export
 
 ### Later
 
 - deeper CPU/VIC half-cycle edge-case accuracy and broader VICE compatibility suites
-- writable/flux-preserving drive media and fast-loader compatibility hardening
-- cartridge-specific bank switching/freezer hardware and TAP v2/recording
-- save states, profiling, and compatibility/performance hardening
+- additional copy-protection/PLL behavior and fast-loader compatibility hardening
+- concrete freezer cartridge families and additional banked cartridge hardware
+- save states, browser persistence, profiling, and compatibility/performance hardening
 
 ## Design Rules
 

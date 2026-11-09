@@ -202,3 +202,29 @@ describe('D64 directory and file extraction', () => {
     expect(decodePetscii(Uint8Array.of(0x5c, 0x5e, 0x5f))).toBe('£↑←');
   });
 });
+
+describe('D64 writable media', () => {
+  it('writes sectors, invalidates directory metadata, and serializes changes', () => {
+    const bytes = makeDirectoryImage();
+    const image = D64Image.parse(bytes);
+    expect(image.listDirectory()[0]?.filename).toBe('HELLO');
+
+    const directory = image.readSector(18, 1);
+    writePetscii(directory, 5, 16, 'UPDATED');
+    image.writeSector(18, 1, directory);
+
+    expect(image.listDirectory()[0]?.filename).toBe('UPDATED');
+    expect(D64Image.parse(image.toBytes()).listDirectory()[0]?.filename).toBe('UPDATED');
+  });
+
+  it('preserves and updates optional error information on export', () => {
+    const bytes = new Uint8Array(175_531);
+    bytes[174_848] = 0x05;
+    const image = D64Image.parse(bytes);
+    image.setSectorErrorCode(1, 0, 0x01);
+
+    const reparsed = D64Image.parse(image.toBytes());
+    expect(reparsed.sectorErrorCode(1, 0)).toBe(0x01);
+    expect(reparsed.toBytes()).toHaveLength(175_531);
+  });
+});

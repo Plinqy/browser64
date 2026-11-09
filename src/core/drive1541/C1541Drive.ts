@@ -1,10 +1,11 @@
 import { Cpu6510, type CpuClockResult } from '../cpu/Cpu6510';
 import { Flag } from '../cpu/Flags';
 import { D64Image } from '../disk/D64Image';
+import { G64Image } from '../disk/G64Image';
 import { IecBus, type IecEndpoint } from '../iec/IecBus';
 import { Via6522 } from '../via/Via6522';
 import { C1541Bus } from './C1541Bus';
-import { DriveMechanism1541 } from './DriveMechanism1541';
+import { DriveMechanism1541, type ExportedDriveMedia } from './DriveMechanism1541';
 
 export const C1541_CLOCK_HZ = 1_000_000;
 
@@ -47,10 +48,24 @@ export class C1541Drive {
     this.bus.loadRom(bytes);
   }
 
-  mountD64(imageOrBytes: D64Image | ArrayLike<number>): D64Image {
+  mountD64(imageOrBytes: D64Image | ArrayLike<number>, writeProtected = false): D64Image {
     const image = imageOrBytes instanceof D64Image ? imageOrBytes : D64Image.parse(imageOrBytes);
-    this.mechanism.mount(image);
+    this.mechanism.mount(image, writeProtected);
     return image;
+  }
+
+  mountG64(imageOrBytes: G64Image | ArrayLike<number>, writeProtected = false): G64Image {
+    const image = imageOrBytes instanceof G64Image ? imageOrBytes : G64Image.parse(imageOrBytes);
+    this.mechanism.mountG64(image, writeProtected);
+    return image;
+  }
+
+  exportMountedMedia(): ExportedDriveMedia | null {
+    return this.mechanism.exportMountedMedia();
+  }
+
+  setDiskWriteProtected(writeProtected: boolean): void {
+    this.mechanism.setWriteProtected(writeProtected);
   }
 
   ejectDisk(): void {
@@ -82,9 +97,9 @@ export class C1541Drive {
 
     const disk = this.mechanism.tick();
     this.via1.setCa1Line(!disk.byteReady);
-    if (disk.byteReady) {
-      // The 64H156 BYTE output also drives the 6502 SO pin. A falling SO edge
-      // asynchronously sets V, which DOS uses as its byte-ready fast path.
+    if (disk.byteReady && this.mechanism.overflowEnabled) {
+      // The 64H156 BYTE output also drives the 6502 SO pin when CA2/SOE is
+      // enabled. CA1 still receives BYTE READY while SOE is disabled.
       this.cpu.setFlag(Flag.Overflow, true);
     }
 
@@ -118,6 +133,7 @@ export class C1541Drive {
     this.via0.setPortBOutputHandler(() => this.syncIecOutputs());
 
     this.via1.setPortAInputProvider(() => this.mechanism.currentDataByte);
+    this.via1.setPortAOutputHandler((pins) => this.mechanism.setWriteDataByte(pins));
     this.via1.setPortBInputProvider(() => {
       let value = 0xff;
       if (this.mechanism.writeProtected) value &= ~0x10;

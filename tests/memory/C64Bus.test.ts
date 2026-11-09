@@ -102,7 +102,7 @@ describe('C64Bus stock no-cartridge banking', () => {
 
     // %111: I/O
     bus.write(0xd020, 0x06);
-    expect(bus.read(0xd020)).toBe(0x06);
+    expect(bus.read(0xd020)).toBe(0xf6);
     expect(bus.readPhysicalRam(0xd020)).toBe(0x44);
 
     // %011: character ROM. Writes still go to the RAM underneath.
@@ -122,8 +122,8 @@ describe('C64Bus stock no-cartridge banking', () => {
     bus.writePhysicalRam(0xd020, 0x44);
     bus.write(0xd020, 0x07);
 
-    expect(bus.peek(0xd020)).toBe(0x07);
-    expect(bus.read(0xd020)).toBe(0x07);
+    expect(bus.peek(0xd020)).toBe(0xf7);
+    expect(bus.read(0xd020)).toBe(0xf7);
     expect(bus.readPhysicalRam(0xd020)).toBe(0x44);
   });
 });

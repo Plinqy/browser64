@@ -65,6 +65,40 @@ describe('Datasette', () => {
     expect(edges).toBe(1);
   });
 
+  it('records rising-edge full-wave intervals into an exportable C64 TAP v1', () => {
+    const deck = new Datasette(985_248, () => {});
+    deck.newBlankTape(0);
+    deck.pressRecord();
+    deck.setMotor(true);
+
+    deck.setWriteLine(false);
+    deck.tick(16);
+    deck.setWriteLine(true);
+    deck.setWriteLine(false);
+    deck.tick(24);
+    deck.setWriteLine(true);
+    deck.pressStop();
+
+    const exported = deck.exportTapBytes();
+    expect(exported).not.toBeNull();
+    const recorded = TapImage.parse(exported!);
+    expect(recorded.version).toBe(1);
+    expect(recorded.pulseAt(0)).toEqual({ cycles: 16, nextOffset: 1 });
+    expect(recorded.pulseAt(1)).toEqual({ cycles: 24, nextOffset: 2 });
+    expect(deck.dirty).toBe(true);
+  });
+
+  it('enforces tape write protection and exits RECORD when protection is enabled', () => {
+    const deck = new Datasette(985_248, () => {});
+    deck.newBlankTape();
+    deck.setWriteProtected(true);
+    expect(() => deck.pressRecord()).toThrow(/write-protected/i);
+    deck.setWriteProtected(false);
+    deck.pressRecord();
+    deck.setWriteProtected(true);
+    expect(deck.recordPressed).toBe(false);
+  });
+
   it('pauses tape position while the motor is off', () => {
     const deck = new Datasette(1000, () => {});
     deck.mount(image([10]));

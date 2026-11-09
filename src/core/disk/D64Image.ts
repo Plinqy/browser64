@@ -53,14 +53,13 @@ const FILE_TYPE_NAMES: Readonly<Record<number, D64FileType>> = Object.freeze({
 });
 
 /**
- * Immutable parser/view for 1541-compatible D64 sector images.
+ * Mutable parser/view for 1541-compatible D64 sector images.
  *
  * Standard 35-track images plus the common 40/42-track extensions are
  * accepted, with or without the optional one-byte-per-sector error table.
  */
 export class D64Image {
   public readonly geometry: D64Geometry;
-  public readonly header: D64DiskHeader;
 
   private readonly diskData: Uint8Array;
   private readonly errorInfo: Uint8Array | null;
@@ -80,13 +79,6 @@ export class D64Image {
       : null;
     this.trackOffsets = buildTrackOffsets(variant.tracks);
 
-    const bam = this.sectorView(DIRECTORY_TRACK, 0);
-    this.header = Object.freeze({
-      name: decodePetscii(bam.subarray(0x90, 0xa0)),
-      id: decodePetscii(bam.subarray(0xa2, 0xa4)),
-      dosType: decodePetscii(bam.subarray(0xa5, 0xa7)),
-      dosVersion: bam[0x02] ?? 0
-    });
   }
 
   static parse(bytes: ArrayLike<number>): D64Image {
@@ -104,15 +96,57 @@ export class D64Image {
     return new D64Image(copy, variant);
   }
 
+  /** Header fields are read live so writes to the BAM/header sector are visible immediately. */
+  get header(): D64DiskHeader {
+    const bam = this.sectorView(DIRECTORY_TRACK, 0);
+    return Object.freeze({
+      name: decodePetscii(bam.subarray(0x90, 0xa0)),
+      id: decodePetscii(bam.subarray(0xa2, 0xa4)),
+      dosType: decodePetscii(bam.subarray(0xa5, 0xa7)),
+      dosVersion: bam[0x02] ?? 0
+    });
+  }
+
   /** Number of sectors physically present on one 1-based D64 track. */
   sectorsOnTrack(track: number): number {
     this.assertTrack(track);
     return sectorsForTrack(track);
   }
 
-  /** Copy one complete 256-byte sector from the immutable image. */
+  /** Copy one complete 256-byte sector from the image. */
   readSector(track: number, sector: number): Uint8Array {
     return this.sectorView(track, sector).slice();
+  }
+
+  /**
+   * Replace one sector exactly as a real DOS write would update the sector image.
+   * Directory/header caches are invalidated because track 18 may have changed.
+   */
+  writeSector(track: number, sector: number, bytes: ArrayLike<number>): void {
+    if (bytes.length !== SECTOR_SIZE) {
+      throw new RangeError(`D64 sector writes must contain exactly ${SECTOR_SIZE} bytes; received ${bytes.length}.`);
+    }
+    const view = this.sectorView(track, sector);
+    for (let index = 0; index < SECTOR_SIZE; index += 1) {
+      view[index] = bytes[index]! & 0xff;
+    }
+    this.directoryCache = null;
+  }
+
+  /** Update an existing optional per-sector error byte. */
+  setSectorErrorCode(track: number, sector: number, code: number): void {
+    if (this.errorInfo === null) {
+      throw new Error('This D64 image does not contain an error-information table.');
+    }
+    this.errorInfo[this.sectorIndex(track, sector)] = code & 0xff;
+  }
+
+  /** Serialize the current mutable image, preserving any optional error table. */
+  toBytes(): Uint8Array {
+    const output = new Uint8Array(this.geometry.dataByteLength + (this.errorInfo?.length ?? 0));
+    output.set(this.diskData, 0);
+    if (this.errorInfo !== null) output.set(this.errorInfo, this.geometry.dataByteLength);
+    return output;
   }
 
   /** Optional D64 error-table byte for a sector, or `null` when no table exists. */

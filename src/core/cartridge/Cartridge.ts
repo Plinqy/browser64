@@ -12,8 +12,14 @@ export interface CartridgeDevice {
   readonly name: string;
   readonly gameHigh: boolean;
   readonly exromHigh: boolean;
+  /** Optional active-low expansion interrupt lines used by freezer/debug cartridges. */
+  readonly irqLow?: boolean;
+  readonly nmiLow?: boolean;
+  readonly dmaLow?: boolean;
 
   reset(): void;
+  /** Optional physical FREEZE button hook. */
+  freeze?(): void;
   readRomL(address: number): number | undefined;
   readRomH(address: number): number | undefined;
   readIo1(offset: number, sideEffectFree: boolean): number | undefined;
@@ -24,9 +30,8 @@ export interface CartridgeDevice {
 
 /**
  * One motherboard expansion port. The abstraction deliberately exposes only
- * the lines generic cartridges need today; IRQ/NMI/DMA can be added here when
- * freezer/banked cartridges are implemented instead of being scattered across
- * the C64 bus.
+ * the cartridge memory/control lines plus IRQ/NMI/DMA and an optional FREEZE
+ * button hook so freezer hardware can integrate without special-casing the bus.
  */
 export class ExpansionPort {
   private attached: CartridgeDevice | null = null;
@@ -55,6 +60,12 @@ export class ExpansionPort {
   get exromHigh(): boolean {
     return this.attached?.exromHigh ?? true;
   }
+
+  get irqAsserted(): boolean { return this.attached?.irqLow === true; }
+  get nmiAsserted(): boolean { return this.attached?.nmiLow === true; }
+  get dmaAsserted(): boolean { return this.attached?.dmaLow === true; }
+
+  freeze(): void { this.attached?.freeze?.(); }
 
   get mode(): CartridgeMode {
     const game = this.gameHigh;

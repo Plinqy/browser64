@@ -2,25 +2,21 @@
 
 ## Overview
 
-`src/core/cartridge` models the C64 expansion port as an electrical/memory participant instead of baking cartridge special cases into the CPU. Version 0.12 adds static generic 8 KiB, 16 KiB, and Ultimax cartridges plus VICE-compatible generic `.CRT` parsing.
+`src/core/cartridge` models the C64 expansion port as a device interface rather than CPU special cases. Static generic cartridges and several common banked CRT families share the same GAME/EXROM, ROML/ROMH, and IO1/IO2 contract.
 
 ## Architecture
 
 ```text
-CRT/raw ROM -> GenericCartridge -> ExpansionPort
-                                   | GAME / EXROM
-                                   | ROML / ROMH
-                                   | IO1 / IO2
-                                   v
-                                 C64Bus
+CRT/raw ROM -> CartridgeDevice -> ExpansionPort -> C64Bus / PLA
+                    |                |
+                    +-- IO1/IO2      +-- IRQ / NMI / DMA
+                    +-- banking      +-- FREEZE hook
 ```
-
-`ExpansionPort` is the stable attachment point. Later banked/freezer cartridges can implement the same `CartridgeDevice` contract and add device-specific IO1/IO2 state without changing PLA decoding throughout the emulator.
 
 ## Implementation Discussion
 
-GAME and EXROM are physical line levels (`true` = released/high). `C64Bus` applies the real PLA configurations for no cartridge, 8 KiB, 16 KiB, and Ultimax operation. Normal cartridge ROM is read-selected: writes beneath ROML/ROMH still update motherboard RAM. Ultimax instead hides most motherboard RAM and leaves `$1000-$7FFF` and `$A000-$CFFF` electrically unmapped.
+Generic hardware type 0 supports raw/static 8 KiB, 16 KiB, and Ultimax mappings. v0.15 adds Ocean type 1 (hardware 5), C64GS/System 3 (15), Dinamic (17), and Magic Desk (19). Each family implements its documented IO1 selection rule instead of flattening banked ROM into a generic image. Magic Desk bit 7 can release GAME/EXROM and disable the cartridge.
 
-Generic CRT support intentionally accepts only hardware type 0, ROM CHIP packets, and bank 0. Other CRT hardware IDs describe real cartridge-specific banking logic and are rejected instead of being flattened into an inaccurate ROM image.
+Debugger `peek()` reads are routed as side-effect-free IO accesses, so address-selected families such as C64GS and Dinamic do not accidentally change banks during inspection.
 
-In Ultimax mode the VIC-II can see the upper 4 KiB of ROMH (`$F000-$FFFF`) at VIC-relative `$3000-$3FFF` in every VIC bank, while character ROM is unavailable. This is modeled separately from the CPU's `$E000-$FFFF` ROMH view.
+The device contract also exposes active-low IRQ/NMI/DMA state and an optional FREEZE button hook. IRQ is merged with motherboard IRQ sources and expansion NMI is edge-detected by `C64Machine`. DMA is exposed as an electrical hook for future bus-arbitrating freezer hardware; v0.15 does not yet steal CPU bus cycles on DMA.

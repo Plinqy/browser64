@@ -6,9 +6,9 @@ describe('C64Io address decoding', () => {
     const io = new C64Io();
     io.write(0x0020, 0x0e);
 
-    expect(io.read(0x0020)).toBe(0x0e);
-    expect(io.read(0x0060)).toBe(0x0e);
-    expect(io.read(0x03e0)).toBe(0x0e);
+    expect(io.read(0x0020)).toBe(0xfe);
+    expect(io.read(0x0060)).toBe(0xfe);
+    expect(io.read(0x03e0)).toBe(0xfe);
   });
 
   it('mirrors SID registers every $20 bytes through $D7FF', () => {

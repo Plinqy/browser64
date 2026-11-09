@@ -7,6 +7,13 @@ const GCR_NIBBLE = Object.freeze([
   0x0d, 0x1d, 0x1e, 0x15
 ] as const);
 
+const GCR_DECODE = (() => {
+  const table = new Int16Array(32);
+  table.fill(-1);
+  for (let value = 0; value < GCR_NIBBLE.length; value += 1) table[GCR_NIBBLE[value]!] = value;
+  return table;
+})();
+
 const SYNC_LENGTH = 5;
 const HEADER_GAP_LENGTH = 9;
 const DATA_GAP_MINIMUM = 8;
@@ -44,6 +51,37 @@ export function encodeGcrBlock(input: ArrayLike<number>): Uint8Array {
     out += 5;
   }
 
+  return output;
+}
+
+/** Decode five-byte Commodore GCR groups back into four binary bytes. */
+export function decodeGcrBlock(input: ArrayLike<number>): Uint8Array {
+  if (input.length % 5 !== 0) {
+    throw new RangeError(`GCR input length must be a multiple of five bytes; received ${input.length}.`);
+  }
+
+  const output = new Uint8Array((input.length / 5) * 4);
+  let out = 0;
+  for (let index = 0; index < input.length; index += 5) {
+    let packed = 0n;
+    for (let byteIndex = 0; byteIndex < 5; byteIndex += 1) {
+      packed = (packed << 8n) | BigInt(input[index + byteIndex]! & 0xff);
+    }
+
+    const nibbles = new Uint8Array(8);
+    for (let nibbleIndex = 7; nibbleIndex >= 0; nibbleIndex -= 1) {
+      const code = Number(packed & 0x1fn);
+      packed >>= 5n;
+      const decoded = GCR_DECODE[code] ?? -1;
+      if (decoded < 0) throw new Error(`Invalid Commodore GCR code $${code.toString(16).padStart(2, '0')}.`);
+      nibbles[nibbleIndex] = decoded;
+    }
+
+    for (let byteIndex = 0; byteIndex < 4; byteIndex += 1) {
+      output[out] = ((nibbles[byteIndex * 2]! << 4) | nibbles[byteIndex * 2 + 1]!) & 0xff;
+      out += 1;
+    }
+  }
   return output;
 }
 
@@ -159,6 +197,85 @@ function appendSector(
   dataBlock[259] = 0;
   appendBytes(output, encodeGcrBlock(dataBlock));
   appendFill(output, 0x55, DATA_GAP_MINIMUM);
+}
+
+/**
+ * Recover valid standard sectors from a raw GCR track into a mutable D64.
+ *
+ * Raw writes that do not form a valid CBM DOS header/data pair remain present
+ * in the mechanism's GCR stream but cannot be represented by D64. G64 should
+ * be used when those non-standard bytes need to be preserved.
+ */
+export function decodeGcrTrackToD64(image: D64Image, track: number, bytes: Uint8Array): number {
+  let updated = 0;
+  let cursor = 0;
+
+  while (cursor < bytes.length) {
+    const headerStart = findNextBlockStart(bytes, cursor);
+    if (headerStart < 0 || headerStart + 10 > bytes.length) break;
+
+    let header: Uint8Array;
+    try {
+      header = decodeGcrBlock(bytes.subarray(headerStart, headerStart + 10));
+    } catch {
+      cursor = headerStart + 1;
+      continue;
+    }
+    if (header[0] !== 0x08) {
+      cursor = headerStart + 10;
+      continue;
+    }
+
+    const headerChecksum = (header[2]! ^ header[3]! ^ header[4]! ^ header[5]!) & 0xff;
+    const sector = header[2] ?? 0xff;
+    const headerTrack = header[3] ?? 0xff;
+    if (header[1] !== headerChecksum || headerTrack !== track || sector >= image.sectorsOnTrack(track)) {
+      cursor = headerStart + 10;
+      continue;
+    }
+
+    const dataStart = findNextBlockStart(bytes, headerStart + 10);
+    if (dataStart < 0 || dataStart + 325 > bytes.length) break;
+    let dataBlock: Uint8Array;
+    try {
+      dataBlock = decodeGcrBlock(bytes.subarray(dataStart, dataStart + 325));
+    } catch {
+      cursor = dataStart + 1;
+      continue;
+    }
+    if (dataBlock[0] !== 0x07) {
+      cursor = dataStart + 325;
+      continue;
+    }
+
+    const sectorData = dataBlock.subarray(1, 257);
+    if (dataBlock[257] !== gcrChecksum(sectorData)) {
+      cursor = dataStart + 325;
+      continue;
+    }
+
+    image.writeSector(track, sector, sectorData);
+    if (image.geometry.hasErrorInfo) image.setSectorErrorCode(track, sector, 1);
+    updated += 1;
+    cursor = dataStart + 325;
+  }
+
+  return updated;
+}
+
+function findNextBlockStart(bytes: Uint8Array, start: number): number {
+  let index = Math.max(0, start);
+  while (index < bytes.length) {
+    if (bytes[index] !== 0xff) {
+      index += 1;
+      continue;
+    }
+    let runEnd = index;
+    while (runEnd < bytes.length && bytes[runEnd] === 0xff) runEnd += 1;
+    if (runEnd - index >= SYNC_LENGTH && runEnd < bytes.length) return runEnd;
+    index = runEnd;
+  }
+  return -1;
 }
 
 function nominalTrackBytes(density: 0 | 1 | 2 | 3): number {

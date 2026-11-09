@@ -1,8 +1,11 @@
+import { cartridgeFromCrt } from '../cartridge/BankedCartridge';
 import { GenericCartridge, type RawCartridgeMode } from '../cartridge/GenericCartridge';
 import { parseCrt, type CrtImage } from '../cartridge/CrtImage';
 import { Cpu6510, type CpuClockResult } from '../cpu/Cpu6510';
 import { C1541Drive, C1541_CLOCK_HZ } from '../drive1541/C1541Drive';
 import type { D64Image } from '../disk/D64Image';
+import type { G64Image } from '../disk/G64Image';
+import type { ExportedDriveMedia } from '../drive1541/DriveMechanism1541';
 import type { IecEndpoint } from '../iec/IecBus';
 import { Disassembler } from '../debugger/Disassembler';
 import { TraceFormatter } from '../debugger/TraceFormatter';
@@ -41,6 +44,7 @@ export class C64Machine {
   public readonly drive1541: C1541Drive;
 
   private cia2IrqWasAsserted = false;
+  private expansionNmiWasAsserted = false;
   private restorePressed = false;
   private masterCycleCounter = 0;
   private cpuStallCounter = 0;
@@ -70,8 +74,20 @@ export class C64Machine {
     this.drive1541.reset();
   }
 
-  mountD64In1541(imageOrBytes: D64Image | ArrayLike<number>): D64Image {
-    return this.drive1541.mountD64(imageOrBytes);
+  mountD64In1541(imageOrBytes: D64Image | ArrayLike<number>, writeProtected = false): D64Image {
+    return this.drive1541.mountD64(imageOrBytes, writeProtected);
+  }
+
+  mountG64In1541(imageOrBytes: G64Image | ArrayLike<number>, writeProtected = false): G64Image {
+    return this.drive1541.mountG64(imageOrBytes, writeProtected);
+  }
+
+  export1541Media(): ExportedDriveMedia | null {
+    return this.drive1541.exportMountedMedia();
+  }
+
+  set1541WriteProtected(writeProtected: boolean): void {
+    this.drive1541.setDiskWriteProtected(writeProtected);
   }
 
   eject1541Disk(): void {
@@ -80,7 +96,7 @@ export class C64Machine {
 
   mountCrt(bytes: ArrayLike<number>): CrtImage {
     const crt = parseCrt(bytes);
-    this.bus.attachCartridge(GenericCartridge.fromParsedCrt(crt));
+    this.bus.attachCartridge(cartridgeFromCrt(crt));
     return crt;
   }
 
@@ -90,12 +106,35 @@ export class C64Machine {
 
   ejectCartridge(): void {
     this.bus.detachCartridge();
+    this.expansionNmiWasAsserted = false;
+    this.syncInterruptLines();
   }
 
-  mountTap(bytes: ArrayLike<number>): TapImage {
+  pressCartridgeFreeze(): void {
+    this.bus.expansion.freeze();
+    this.syncInterruptLines();
+  }
+
+  mountTap(bytes: ArrayLike<number>, writeProtected = false): TapImage {
     const image = TapImage.parse(bytes);
-    this.bus.datasette.mount(image);
+    this.bus.datasette.mount(image, writeProtected);
     return image;
+  }
+
+  newBlankTape(): TapImage {
+    return this.bus.datasette.newBlankTape(videoStandardForTiming(this.timing));
+  }
+
+  recordTape(): void {
+    this.bus.datasette.pressRecord();
+  }
+
+  exportTape(): Uint8Array | null {
+    return this.bus.datasette.exportTapBytes();
+  }
+
+  setTapeWriteProtected(writeProtected: boolean): void {
+    this.bus.datasette.setWriteProtected(writeProtected);
   }
 
   ejectTape(): void {
@@ -126,6 +165,7 @@ export class C64Machine {
       this.bus.resetIo();
       this.bus.io.colorRam.clear();
       this.cia2IrqWasAsserted = false;
+      this.expansionNmiWasAsserted = false;
       this.restorePressed = false;
       this.masterCycleCounter = 0;
       this.cpuStallCounter = 0;
@@ -151,6 +191,7 @@ export class C64Machine {
       this.bus.resetProcessorPort();
       this.bus.resetIo();
       this.cia2IrqWasAsserted = false;
+      this.expansionNmiWasAsserted = false;
       this.restorePressed = false;
       this.masterCycleCounter = 0;
       this.cpuStallCounter = 0;
@@ -323,9 +364,15 @@ export class C64Machine {
   private syncInterruptLines(): void {
     const cia1Irq = this.bus.io.cia1.irqAsserted;
     const vicIrq = this.bus.io.vic.irqAsserted;
-    const maskableIrq = cia1Irq || vicIrq;
+    const expansionIrq = this.bus.expansion.irqAsserted;
+    const maskableIrq = cia1Irq || vicIrq || expansionIrq;
     const cia2Irq = this.bus.io.cia2.irqAsserted;
-    const irqSources = [cia1Irq ? 'CIA1' : '', vicIrq ? 'VIC-II' : ''].filter((source) => source !== '');
+    const expansionNmi = this.bus.expansion.nmiAsserted;
+    const irqSources = [
+      cia1Irq ? 'CIA1' : '',
+      vicIrq ? 'VIC-II' : '',
+      expansionIrq ? 'EXPANSION' : ''
+    ].filter((source) => source !== '');
 
     this.monitor.observeIrq(maskableIrq, irqSources);
     this.cpu.setIrqLine(maskableIrq);
@@ -334,7 +381,16 @@ export class C64Machine {
       this.cpu.pulseNmi();
       this.monitor.observeNmi('CIA2');
     }
+    if (expansionNmi && !this.expansionNmiWasAsserted) {
+      this.cpu.pulseNmi();
+      this.monitor.observeNmi('EXPANSION');
+    }
 
     this.cia2IrqWasAsserted = cia2Irq;
+    this.expansionNmiWasAsserted = expansionNmi;
   }
+}
+
+function videoStandardForTiming(timing: VicTimingProfile): number {
+  return timing.standard === 'ntsc' ? 1 : 0;
 }
