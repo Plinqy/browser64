@@ -4,4 +4,7 @@ coverage/
 .vite/
 .DS_Store
 *.log
-src/roms/*.bin
+src/roms/
+*.d64
+*.t64
+*.sid
