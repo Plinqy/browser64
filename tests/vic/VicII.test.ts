@@ -102,6 +102,24 @@ describe('VicII raster timing and interrupts', () => {
     vic.tick(63);
     expect(vic.read(0x12)).toBe(0x01);
   });
+
+
+  it('matches VIC-II electrical readback masks and keeps light-pen latches read-only', () => {
+    const vic = new VicII();
+
+    vic.write(0x16, 0x15);
+    vic.write(0x20, 0x06);
+    vic.write(0x27, 0x0b);
+    vic.write(0x13, 0xaa);
+    vic.write(0x14, 0xbb);
+
+    expect(vic.read(0x16)).toBe(0xd5); // unused bits 6-7 read high
+    expect(vic.read(0x20)).toBe(0xf6); // color registers have four physical data bits
+    expect(vic.read(0x27)).toBe(0xfb);
+    expect(vic.read(0x13)).toBe(0x00);
+    expect(vic.read(0x14)).toBe(0x00);
+    expect(vic.read(0x2f)).toBe(0xff);
+  });
 });
 
 describe('VicII standard text rendering', () => {
@@ -142,6 +160,25 @@ describe('VicII standard text rendering', () => {
     const activeStart = VIC_ACTIVE_Y * VIC_FRAMEBUFFER_WIDTH + VIC_ACTIVE_X;
 
     expect(frame[activeStart]).toBe(0x05);
+  });
+
+
+  it('uses the measured asymmetric 38-column display window', () => {
+    const bus = new C64Bus();
+    bus.io.vic.write(0x11, 0x1b); // DEN, 25 rows
+    bus.io.vic.write(0x16, 0x00); // 38 columns, XSCROLL=0
+    bus.io.vic.write(0x20, 0x06);
+    bus.io.vic.write(0x21, 0x01);
+    bus.io.vic.tick(51 * 63 + 1);
+
+    const line = VIC_ACTIVE_Y * VIC_FRAMEBUFFER_WIDTH;
+    const start = VIC_ACTIVE_X + 7;
+    const end = start + 304;
+
+    expect(bus.io.vic.framebuffer[line + start - 1]).toBe(0x06);
+    expect(bus.io.vic.framebuffer[line + start]).toBe(0x01);
+    expect(bus.io.vic.framebuffer[line + end - 1]).toBe(0x01);
+    expect(bus.io.vic.framebuffer[line + end]).toBe(0x06);
   });
 });
 

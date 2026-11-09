@@ -43,7 +43,7 @@ app.innerHTML = `
     <header>
       <p class="eyebrow">FROM-SCRATCH C64 EMULATOR</p>
       <h1>Commodore 64 Development Console</h1>
-      <p>v0.13 — advanced monitor tooling: breakpoints, watchpoints, raster stops, editable state, execution history, and bus/interrupt tracing.</p>
+      <p>v0.14 — compatibility hardening: old-6526 timer/IRQ pipeline timing plus VIC-II register readback and 38-column border fidelity.</p>
     </header>
 
     <article class="panel rom-panel">

@@ -53,7 +53,7 @@ const DISPLAY_LAST_RASTER_25 = 250;
 const DISPLAY_FIRST_RASTER_24 = 55;
 const DISPLAY_LAST_RASTER_24 = 246;
 const DISPLAY_X_40 = VIC_ACTIVE_X;
-const DISPLAY_X_38 = VIC_ACTIVE_X + 8;
+const DISPLAY_X_38 = VIC_ACTIVE_X + 7;
 const SPRITE_X_ORIGIN = 24;
 const SPRITE_COUNT = 8;
 const SPRITE_POINTER_OFFSET = 0x03f8;
@@ -69,7 +69,8 @@ const NTSC_R8_SPRITE_POINTER_CYCLES = [59, 61, 63, 65, 2, 4, 6, 8] as const;
  * using VC/VCBASE/RC, and those bytes immediately generate framebuffer pixels.
  * All five documented graphics modes and all eight hardware sprites are
  * represented, including expansion, multicolor, priority, collision latches,
- * collision IRQs, and sprite DMA bus requests.
+ * collision IRQs, and sprite DMA bus requests. v0.14 hardens the electrical
+ * register readback masks and the measured asymmetric 38-column border window.
  */
 export class VicII implements MemoryMappedDevice {
   public readonly framebuffer = new Uint8Array(VIC_FRAMEBUFFER_WIDTH * VIC_FRAMEBUFFER_HEIGHT);
@@ -151,6 +152,10 @@ export class VicII implements MemoryMappedDevice {
         this.maybeLatchRasterInterruptOnCompareWrite(previousCompare);
         break;
       }
+      case 0x13:
+      case 0x14:
+        // Light-pen coordinates are hardware latches. CPU writes do not alter them.
+        break;
       case 0x18:
         this.registers[register] = byte & 0xfe;
         break;
@@ -407,6 +412,9 @@ export class VicII implements MemoryMappedDevice {
         return (this.registers[0x11]! & 0x7f) | ((this.rasterLineValue & 0x0100) >> 1);
       case 0x12:
         return this.rasterLineValue & 0xff;
+      case 0x16:
+        // SCROLX bits 6-7 are unimplemented pins and read back high.
+        return 0xc0 | (this.registers[0x16]! & 0x3f);
       case 0x18:
         return this.registers[0x18]! | 0x01;
       case 0x19:
@@ -418,6 +426,10 @@ export class VicII implements MemoryMappedDevice {
       case 0x1f:
         return this.spriteBackgroundCollision;
       default:
+        if (register >= 0x20 && register <= 0x2e) {
+          // VIC color registers physically implement only four data bits.
+          return 0xf0 | (this.registers[register]! & 0x0f);
+        }
         return this.registers[register] ?? 0xff;
     }
   }

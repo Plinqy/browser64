@@ -100,9 +100,11 @@ describe('C64Machine CIA integration', () => {
     machine.bus.io.cia1.write(0x05, 0x00);
     machine.bus.io.cia1.write(0x0e, 0x01);
 
-    const cycles = machine.step(); // NOP
+    const cycles = machine.step(); // first NOP spans the CIA START pipeline
 
     expect(cycles).toBe(2);
+    expect(machine.bus.io.cia1.timerACounter).toBe(10);
+    machine.step();
     expect(machine.bus.io.cia1.timerACounter).toBe(8);
   });
 
@@ -120,11 +122,14 @@ describe('C64Machine CIA integration', () => {
     machine.bus.io.cia1.write(0x0d, 0x81);
     machine.bus.io.cia1.write(0x0e, 0x01);
 
-    machine.step(); // NOP; timer underflows during its cycles
-    expect(machine.bus.io.cia1.irqAsserted).toBe(true);
+    machine.step(); // NOP; source flag appears, master IRQ is still delayed
+    expect(machine.bus.io.cia1.irqAsserted).toBe(false);
 
-    machine.step(); // IRQ asserted after the NOP's interrupt sample, so one more NOP completes.
+    machine.step(); // next NOP promotes the CIA IRQ latch
+    expect(machine.bus.io.cia1.irqAsserted).toBe(true);
     expect(machine.cpu.pc).toBe(0xe003);
+    machine.step(); // one instruction was already sampled before the IRQ edge
+    expect(machine.cpu.pc).toBe(0xe004);
     machine.step(); // hardware IRQ service
     expect(machine.cpu.pc).toBe(0xe200);
   });
@@ -137,9 +142,12 @@ describe('C64Machine CIA integration', () => {
 
     machine.bus.io.cia2.write(0x0d, 0x90); // enable FLAG interrupt
     machine.bus.io.cia2.setFlagLine(false);
-    expect(machine.bus.io.cia2.irqAsserted).toBe(true);
+    expect(machine.bus.io.cia2.irqAsserted).toBe(false);
 
-    machine.step();
+    machine.step(); // FLAG source is promoted to the CIA2 interrupt output
+    expect(machine.bus.io.cia2.irqAsserted).toBe(true);
+    machine.step(); // NMI edge has been latched by the CPU
+    machine.step(); // hardware NMI service
     expect(machine.cpu.pc).toBe(0xe100);
   });
 

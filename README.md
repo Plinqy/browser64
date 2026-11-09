@@ -2,7 +2,7 @@
 
 A from-scratch Commodore 64 emulator written in TypeScript for the browser.
 
-Version **0.13.0** adds an integrated machine monitor with breakpoints, watchpoints, raster stops, editable state, bounded execution/bus/interrupt histories, and VIC/CIA/SID inspection. It builds on the true 1541, cartridge/expansion-port, and TAP/Datasette support added in the preceding milestones.
+Version **0.14.0** hardens timing-sensitive CIA/VIC behavior for real software compatibility. The old-6526 timer pipeline now models delayed START/count/load state, synchronized CNT clocks, the reset-high CNT pin, and the one-PHI2 interrupt latch delay; VIC-II readback masks and the measured asymmetric 38-column display window now match hardware behavior more closely. The v0.13 machine monitor remains fully integrated for inspecting these timing changes.
 
 ## Current Capabilities
 
@@ -44,9 +44,10 @@ Version **0.13.0** adds an integrated machine monitor with breakpoints, watchpoi
 ### MOS 6526 CIA and Input
 
 - port and DDR behavior
-- timers A/B and Timer-B cascading
-- interrupt control/mask logic
-- FLAG/CNT behavior
+- timers A/B with old-6526 START/count/force-load pipeline timing
+- Timer-B cascading and underflow/CNT gated mode
+- delayed interrupt master latch and hardware IMR/ICR acknowledgement semantics
+- FLAG/CNT behavior with synchronized timer CNT edges and reset-high CNT
 - TOD clock/alarm foundation
 - serial input shifting
 - complete 8×8 C64 keyboard matrix
@@ -73,6 +74,8 @@ Version **0.13.0** adds an integrated machine monitor with breakpoints, watchpoi
 - sprite priority and collision latches/IRQs
 - sprite DMA BA/AEC request windows
 - live color-index framebuffer
+- VIC register electrical readback masks and read-only light-pen latches
+- measured 38-column window geometry (7-pixel left / 9-pixel right border expansion)
 
 ### PRG Loading
 
@@ -165,7 +168,7 @@ Version **0.13.0** adds an integrated machine monitor with breakpoints, watchpoi
 - measured/empirically calibrated combined-waveform parity
 - half-cycle-exact sprite p/s DMA fetch ordering
 - exact dot-clock border transitions and border-opening tricks
-- light pen
+- light-pen pin capture and once-per-frame latch timing
 - half-cycle-exact shared-bus/open-bus phase ordering
 - sprite crunch and obscure expansion flip-flop tricks
 - older 6567R56A NTSC profile and deeper per-revision VIC timing
@@ -226,7 +229,7 @@ The Klaus Dormann functional test remains optional. If you possess the 64 KiB `6
 tests/assets/6502_functional_test.bin
 ```
 
-## v0.13 Architecture
+## v0.14 Architecture
 
 ```text
 Browser adapters
@@ -287,18 +290,18 @@ The host-only input adapter is separately documented in `src/input/README.md`.
 
 ## Roadmap
 
-### v0.13 — Advanced debugger tooling
+### v0.14 — Hardware fidelity / compatibility hardening
 
-- address breakpoints and CPU watchpoints
-- raster line/cycle breakpoints
-- editable CPU/RAM state at safe instruction boundaries
-- bounded execution, bus, and interrupt histories
-- VIC/CIA/SID/processor-port and screen-memory inspection
-- browser raster/cycle trace visualization
+- old-6526 timer START/count/load pipeline timing
+- synchronized CNT timer edges and reset-high CNT behavior
+- one-PHI2 delayed CIA master interrupt latch with hardware IMR/ICR semantics
+- VIC-II electrical register readback masks and read-only light-pen registers
+- measured asymmetric 38-column display window
+- focused timing regressions at CIA, VIC, and machine-integration levels
 
 ### Later
 
-- deeper CPU/VIC half-cycle edge-case accuracy and VICE compatibility tests
+- deeper CPU/VIC half-cycle edge-case accuracy and broader VICE compatibility suites
 - writable/flux-preserving drive media and fast-loader compatibility hardening
 - cartridge-specific bank switching/freezer hardware and TAP v2/recording
 - save states, profiling, and compatibility/performance hardening

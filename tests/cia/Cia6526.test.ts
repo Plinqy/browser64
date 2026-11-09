@@ -40,77 +40,120 @@ describe('Cia6526 reset and parallel ports', () => {
 });
 
 describe('Cia6526 timers and interrupts', () => {
-  it('runs Timer A continuously, reloads its latch, and acknowledges ICR on read', () => {
+  it('uses the old-6526 START/count pipeline and delays the master IRQ latch by one PHI2', () => {
     const cia = new Cia6526();
     cia.write(0x04, 0x02);
     cia.write(0x05, 0x00);
     cia.write(0x0d, 0x80 | CiaInterrupt.TimerA);
     cia.write(0x0e, 0x01);
 
+    cia.tick(2);
+    expect(cia.timerACounter).toBe(2); // START has not reached the count stage yet.
     cia.tick(1);
     expect(cia.timerACounter).toBe(1);
     cia.tick(1);
-    expect(cia.timerACounter).toBe(0);
-    cia.tick(1);
 
-    expect(cia.timerACounter).toBe(2);
+    expect(cia.timerACounter).toBe(2); // underflow reloads without exposing zero in PHI2 mode
+    expect(cia.interruptFlagsValue & CiaInterrupt.TimerA).toBe(CiaInterrupt.TimerA);
+    expect(cia.irqAsserted).toBe(false); // source latch is visible one cycle before master IRQ
+
+    cia.tick(1);
     expect(cia.irqAsserted).toBe(true);
     expect(cia.peek(0x0d)).toBe(0x80 | CiaInterrupt.TimerA);
-    expect(cia.irqAsserted).toBe(true);
     expect(cia.read(0x0d)).toBe(0x80 | CiaInterrupt.TimerA);
     expect(cia.irqAsserted).toBe(false);
     expect(cia.peek(0x0d)).toBe(0x00);
   });
 
-  it('stops a one-shot timer after underflow', () => {
+  it('delays force-load through the timer load pipeline while a timer is running', () => {
+    const cia = new Cia6526();
+    cia.write(0x04, 0x05);
+    cia.write(0x05, 0x00);
+    cia.write(0x0e, 0x01);
+    cia.tick(4);
+    expect(cia.timerACounter).toBe(3);
+
+    cia.write(0x04, 0x09);
+    cia.write(0x05, 0x00); // running: updates latch but does not immediately load counter
+    cia.write(0x0e, 0x11); // START + force load
+
+    cia.tick(1);
+    expect(cia.timerACounter).toBe(2);
+    cia.tick(1);
+    expect(cia.timerACounter).toBe(9);
+  });
+
+  it('stops a one-shot timer on the underflow after the START pipeline', () => {
     const cia = new Cia6526();
     cia.write(0x04, 0x01);
     cia.write(0x05, 0x00);
     cia.write(0x0e, 0x09);
 
     cia.tick(2);
+    expect(cia.controlA & 0x01).toBe(0x01);
+    cia.tick(1);
 
     expect(cia.timerACounter).toBe(1);
     expect(cia.controlA & 0x01).toBe(0);
     expect(cia.interruptFlagsValue & CiaInterrupt.TimerA).toBe(CiaInterrupt.TimerA);
   });
 
-  it('can cascade Timer B from Timer A underflows', () => {
+  it('cascades Timer B from pipelined Timer A underflows', () => {
+    const cia = new Cia6526();
+    cia.write(0x04, 0x02);
+    cia.write(0x05, 0x00);
+    cia.write(0x06, 0x02);
+    cia.write(0x07, 0x00);
+    cia.write(0x0e, 0x01);
+    cia.write(0x0f, 0x41); // start; count Timer A underflows
+
+    cia.tick(4); // first Timer-A underflow has entered Timer-B's count pipeline
+    expect(cia.timerBCounter).toBe(2);
+    cia.tick(1);
+    expect(cia.timerBCounter).toBe(1);
+    cia.tick(3);
+    expect(cia.timerBCounter).toBe(0);
+    cia.tick(2);
+
+    expect(cia.timerBCounter).toBe(2);
+    expect(cia.interruptFlagsValue & CiaInterrupt.TimerB).toBe(CiaInterrupt.TimerB);
+  });
+
+  it('uses CNT high as the reset default for Timer-B underflow+CNT mode', () => {
     const cia = new Cia6526();
     cia.write(0x04, 0x00);
     cia.write(0x05, 0x00);
     cia.write(0x06, 0x01);
     cia.write(0x07, 0x00);
     cia.write(0x0e, 0x01);
-    cia.write(0x0f, 0x41); // start; count Timer A underflows
+    cia.write(0x0f, 0x61); // Timer-A underflows, gated by CNT high
 
-    cia.tick(1);
-    expect(cia.timerBCounter).toBe(0);
-    cia.tick(1);
+    cia.tick(3);
 
-    expect(cia.timerBCounter).toBe(1);
     expect(cia.interruptFlagsValue & CiaInterrupt.TimerB).toBe(CiaInterrupt.TimerB);
   });
 
-  it('latches interrupt sources even while masked and asserts when the mask is later enabled', () => {
+  it('latches masked sources, delays IMR-triggered IRQ, and only ICR read releases an asserted IRQ', () => {
     const cia = new Cia6526();
-    cia.write(0x04, 0x00);
-    cia.write(0x05, 0x00);
-    cia.write(0x0e, 0x01);
-    cia.tick(1);
+    cia.setFlagLine(false);
 
-    expect(cia.interruptFlagsValue & CiaInterrupt.TimerA).toBe(CiaInterrupt.TimerA);
+    expect(cia.interruptFlagsValue & CiaInterrupt.Flag).toBe(CiaInterrupt.Flag);
     expect(cia.irqAsserted).toBe(false);
 
-    cia.write(0x0d, 0x80 | CiaInterrupt.TimerA);
+    cia.write(0x0d, 0x80 | CiaInterrupt.Flag);
+    expect(cia.irqAsserted).toBe(false);
+    cia.tick(1);
     expect(cia.irqAsserted).toBe(true);
 
-    cia.write(0x0d, CiaInterrupt.TimerA);
+    cia.write(0x0d, CiaInterrupt.Flag); // clearing IMR cannot clear the IRQ flip-flop
+    expect(cia.irqAsserted).toBe(true);
+    expect(cia.interruptFlagsValue & CiaInterrupt.Flag).toBe(CiaInterrupt.Flag);
+
+    expect(cia.read(0x0d)).toBe(0x80 | CiaInterrupt.Flag);
     expect(cia.irqAsserted).toBe(false);
-    expect(cia.interruptFlagsValue & CiaInterrupt.TimerA).toBe(CiaInterrupt.TimerA);
   });
 
-  it('counts Timer A from CNT positive edges when selected', () => {
+  it('synchronizes Timer-A CNT edges through the timer pipeline', () => {
     const cia = new Cia6526();
     cia.write(0x04, 0x01);
     cia.write(0x05, 0x00);
@@ -120,24 +163,35 @@ describe('Cia6526 timers and interrupts', () => {
     expect(cia.timerACounter).toBe(1);
 
     pulseCnt(cia);
+    expect(cia.timerACounter).toBe(1);
+    cia.tick(1);
+    expect(cia.timerACounter).toBe(1);
+    cia.tick(1);
     expect(cia.timerACounter).toBe(0);
+
     pulseCnt(cia);
+    cia.tick(1);
     expect(cia.timerACounter).toBe(1);
     expect(cia.interruptFlagsValue & CiaInterrupt.TimerA).toBe(CiaInterrupt.TimerA);
   });
 
-  it('raises FLAG only on the negative edge', () => {
+  it('raises FLAG only on the negative edge and exposes its IRQ one PHI2 later', () => {
     const cia = new Cia6526();
     cia.write(0x0d, 0x80 | CiaInterrupt.Flag);
 
     cia.setFlagLine(false);
+    expect(cia.irqAsserted).toBe(false);
+    cia.tick(1);
     expect(cia.irqAsserted).toBe(true);
     expect(cia.read(0x0d)).toBe(0x80 | CiaInterrupt.Flag);
 
     cia.setFlagLine(false);
+    cia.tick(1);
     expect(cia.irqAsserted).toBe(false);
     cia.setFlagLine(true);
     cia.setFlagLine(false);
+    expect(cia.irqAsserted).toBe(false);
+    cia.tick(1);
     expect(cia.irqAsserted).toBe(true);
   });
 });
@@ -190,6 +244,8 @@ describe('Cia6526 TOD and serial input', () => {
 
     pulseTod(cia, 6);
 
+    expect(cia.irqAsserted).toBe(false);
+    cia.tick(1);
     expect(cia.irqAsserted).toBe(true);
     expect(cia.peek(0x0d)).toBe(0x80 | CiaInterrupt.Alarm);
   });
@@ -203,6 +259,8 @@ describe('Cia6526 TOD and serial input', () => {
     }
 
     expect(cia.read(0x0c)).toBe(0xa5);
+    expect(cia.irqAsserted).toBe(false);
+    cia.tick(1);
     expect(cia.irqAsserted).toBe(true);
     expect(cia.peek(0x0d)).toBe(0x80 | CiaInterrupt.Serial);
   });

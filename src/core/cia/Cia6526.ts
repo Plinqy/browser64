@@ -20,9 +20,9 @@ const INTERRUPT_MASK = 0x1f;
  * v0.3 models the software-visible register file, both parallel ports, both
  * 16-bit interval timers, interrupt mask/data behavior, TOD/alarm clock,
  * negative-edge FLAG input, CNT-driven timer modes, and serial input shifting.
- * Timing advances in explicit PHI2 cycles, but known transistor-level CIA
- * interrupt/timer pipeline quirks are intentionally deferred to a later
- * cycle-exact compatibility phase.
+ * v0.14 adds the documented old-6526 timer count/load pipeline and delayed IRQ
+ * latch behavior used by timing-sensitive C64 software. The remaining silicon
+ * corner cases (notably the old-CIA Timer-B ICR race) stay explicitly deferred.
  */
 export class Cia6526 implements MemoryMappedDevice {
   private pra = 0;
@@ -58,7 +58,28 @@ export class Cia6526 implements MemoryMappedDevice {
   private timerAPulse = false;
   private timerBPulse = false;
 
-  private cntHigh = false;
+  // The 6526 does not start/stop/decode timer clocks combinatorially. START,
+  // CNT/PHI2 steps, force-load, and one-shot state move through short internal
+  // pipelines. These stages reproduce the externally visible two-cycle START
+  // delay and delayed force-load behavior documented by the classic CIA tests.
+  private timerACount2 = false;
+  private timerACount3 = false;
+  private timerBCount2 = false;
+  private timerBCount3 = false;
+  private timerALoad1 = false;
+  private timerBLoad1 = false;
+  private timerAForceLoad = false;
+  private timerBForceLoad = false;
+  private timerAOneShot0 = false;
+  private timerBOneShot0 = false;
+
+  // Old 6526s latch the source bit first and assert the master IRQ indication
+  // one PHI2 later. Once asserted, removing the IMR bit does not release IRQ;
+  // reading ICR is the acknowledge operation that clears it.
+  private irqPending = false;
+  private cntRisePending = false;
+
+  private cntHigh = true;
   private spHigh = true;
   private flagHigh = true;
 
@@ -214,7 +235,23 @@ export class Cia6526 implements MemoryMappedDevice {
     this.timerAPulse = false;
     this.timerBPulse = false;
 
-    this.cntHigh = false;
+    this.timerACount2 = false;
+    this.timerACount3 = false;
+    this.timerBCount2 = false;
+    this.timerBCount3 = false;
+    this.timerALoad1 = false;
+    this.timerBLoad1 = false;
+    this.timerAForceLoad = false;
+    this.timerBForceLoad = false;
+    this.timerAOneShot0 = false;
+    this.timerBOneShot0 = false;
+
+    this.irqPending = false;
+    this.cntRisePending = false;
+
+    // CNT is pulled high when nothing external drives it. Several C64 CIA
+    // compatibility tests depend on Timer-B mode 3 seeing this reset level.
+    this.cntHigh = true;
     this.spHigh = true;
     this.flagHigh = true;
     this.portAOutputChange();
@@ -228,20 +265,12 @@ export class Cia6526 implements MemoryMappedDevice {
 
     for (let cycle = 0; cycle < cycles; cycle += 1) {
       this.endTimerOutputPulses();
+      this.promotePendingIrq();
 
-      let timerAUnderflow = false;
-      if (this.timerAStarted && !this.timerACountsCnt) {
-        timerAUnderflow = this.clockTimerA();
-      }
-
-      if (this.timerBStarted) {
-        const mode = this.timerBInputMode;
-        if (mode === 0) {
-          this.clockTimerB();
-        } else if (mode >= 2 && timerAUnderflow && (mode === 2 || this.cntHigh)) {
-          this.clockTimerB();
-        }
-      }
+      const cntRise = this.cntRisePending;
+      this.cntRisePending = false;
+      const timerAUnderflow = this.clockTimerA(cntRise);
+      this.clockTimerB(cntRise, timerAUnderflow);
     }
   }
 
@@ -254,19 +283,10 @@ export class Cia6526 implements MemoryMappedDevice {
       return;
     }
 
-    let timerAUnderflow = false;
-    if (this.timerAStarted && this.timerACountsCnt) {
-      timerAUnderflow = this.clockTimerA();
-    }
-
-    if (this.timerBStarted) {
-      const mode = this.timerBInputMode;
-      if (mode === 1) {
-        this.clockTimerB();
-      } else if (mode >= 2 && timerAUnderflow && (mode === 2 || this.cntHigh)) {
-        this.clockTimerB();
-      }
-    }
+    // Timer steps are synchronized through the same internal pipeline as PHI2
+    // clocks. Preserve the edge until the next CIA tick instead of changing a
+    // counter directly from this asynchronous pin setter.
+    this.cntRisePending = true;
 
     if (!this.serialOutputMode) {
       this.serialShift = ((this.serialShift << 1) | (this.spHigh ? 1 : 0)) & 0xff;
@@ -435,38 +455,85 @@ export class Cia6526 implements MemoryMappedDevice {
     return (this.cra & 0x40) !== 0;
   }
 
-  private clockTimerA(): boolean {
-    if (this.timerA !== 0) {
+  private clockTimerA(cntRise: boolean): boolean {
+    if (this.timerACount3 && this.timerA !== 0) {
       this.timerA = (this.timerA - 1) & 0xffff;
-      return false;
     }
 
-    this.timerA = this.timerALatch;
-    this.raiseInterrupt(CiaInterrupt.TimerA);
-    this.updateTimerOutput('A');
+    const nextCount2 = this.timerAStarted && !this.timerACountsCnt;
+    let nextCount3 = this.timerACount2 || (this.timerAStarted && this.timerACountsCnt && cntRise);
+    const loadNow = this.timerALoad1;
+    const nextLoad1 = this.timerAForceLoad;
+    const nextOneShot0 = (this.cra & 0x08) !== 0;
+    const nextOneShot = this.timerAOneShot0;
+    this.timerAForceLoad = false;
 
-    if ((this.cra & 0x08) !== 0) {
+    let underflow = false;
+    if (this.timerA === 0 && nextCount3) {
+      underflow = true;
+      this.raiseInterrupt(CiaInterrupt.TimerA);
+      this.updateTimerOutput('A');
+    }
+
+    if (loadNow || underflow) {
+      this.timerA = this.timerALatch;
+      // A reload consumes the count clock that caused it.
+      nextCount3 = false;
+    }
+
+    if (underflow && (nextOneShot0 || nextOneShot)) {
       this.cra &= ~0x01;
     }
 
-    return true;
+    this.timerACount2 = underflow && (nextOneShot0 || nextOneShot) ? false : nextCount2;
+    this.timerACount3 = nextCount3;
+    this.timerALoad1 = nextLoad1;
+    this.timerAOneShot0 = nextOneShot0;
+    return underflow;
   }
 
-  private clockTimerB(): boolean {
-    if (this.timerB !== 0) {
+  private clockTimerB(cntRise: boolean, timerAUnderflow: boolean): boolean {
+    if (this.timerBCount3 && this.timerB !== 0) {
       this.timerB = (this.timerB - 1) & 0xffff;
-      return false;
     }
 
-    this.timerB = this.timerBLatch;
-    this.raiseInterrupt(CiaInterrupt.TimerB);
-    this.updateTimerOutput('B');
+    const mode = this.timerBInputMode;
+    const nextCount2 = this.timerBStarted && mode === 0;
+    const step = mode === 1
+      ? cntRise
+      : mode === 2
+        ? timerAUnderflow
+        : mode === 3
+          ? timerAUnderflow && this.cntHigh
+          : false;
+    let nextCount3 = this.timerBCount2 || (this.timerBStarted && step);
+    const loadNow = this.timerBLoad1;
+    const nextLoad1 = this.timerBForceLoad;
+    const nextOneShot0 = (this.crb & 0x08) !== 0;
+    const nextOneShot = this.timerBOneShot0;
+    this.timerBForceLoad = false;
 
-    if ((this.crb & 0x08) !== 0) {
+    let underflow = false;
+    if (this.timerB === 0 && nextCount3) {
+      underflow = true;
+      this.raiseInterrupt(CiaInterrupt.TimerB);
+      this.updateTimerOutput('B');
+    }
+
+    if (loadNow || underflow) {
+      this.timerB = this.timerBLatch;
+      nextCount3 = false;
+    }
+
+    if (underflow && (nextOneShot0 || nextOneShot)) {
       this.crb &= ~0x01;
     }
 
-    return true;
+    this.timerBCount2 = underflow && (nextOneShot0 || nextOneShot) ? false : nextCount2;
+    this.timerBCount3 = nextCount3;
+    this.timerBLoad1 = nextLoad1;
+    this.timerBOneShot0 = nextOneShot0;
+    return underflow;
   }
 
   private updateTimerOutput(timer: 'A' | 'B'): void {
@@ -505,7 +572,7 @@ export class Cia6526 implements MemoryMappedDevice {
     this.cra = value & 0xef;
 
     if (forceLoad) {
-      this.timerA = this.timerALatch;
+      this.timerAForceLoad = true;
     }
 
     if (!wasStarted && this.timerAStarted && (this.cra & 0x04) !== 0) {
@@ -519,7 +586,7 @@ export class Cia6526 implements MemoryMappedDevice {
     this.crb = value & 0xef;
 
     if (forceLoad) {
-      this.timerB = this.timerBLatch;
+      this.timerBForceLoad = true;
     }
 
     if (!wasStarted && this.timerBStarted && (this.crb & 0x04) !== 0) {
@@ -535,7 +602,9 @@ export class Cia6526 implements MemoryMappedDevice {
       this.interruptMask &= ~bits;
     }
     this.interruptMask &= INTERRUPT_MASK;
-    this.updateIrq();
+    if ((this.interruptFlags & this.interruptMask & INTERRUPT_MASK) !== 0) {
+      this.irqPending = true;
+    }
   }
 
   private readInterruptData(clear: boolean): number {
@@ -543,6 +612,7 @@ export class Cia6526 implements MemoryMappedDevice {
     if (clear) {
       this.interruptFlags = 0;
       this.irq = false;
+      this.irqPending = false;
     }
     return value;
   }
@@ -550,11 +620,17 @@ export class Cia6526 implements MemoryMappedDevice {
   private raiseInterrupt(source: CiaInterrupt): void {
     this.interruptFlags |= source;
     this.interruptFlags &= INTERRUPT_MASK;
-    this.updateIrq();
+    if ((this.interruptFlags & this.interruptMask & INTERRUPT_MASK) !== 0) {
+      this.irqPending = true;
+    }
   }
 
-  private updateIrq(): void {
-    this.irq = (this.interruptFlags & this.interruptMask & INTERRUPT_MASK) !== 0;
+  private promotePendingIrq(): void {
+    if (!this.irqPending) {
+      return;
+    }
+    this.irqPending = false;
+    this.irq = true;
   }
 
   private readTodRegister(index: number, sideEffects: boolean): number {
