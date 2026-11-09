@@ -61,7 +61,7 @@ export class T64Image {
 
     const copy = Uint8Array.from(bytes, (value) => value & 0xff);
     const signature = decodeAscii(copy.subarray(0, 32)).replace(/\0.*$/u, '').trimEnd();
-    if (!/^C64S?\s+tape\s+image\s+file/iu.test(signature)) {
+    if (!/^C64S?\s+tape\s+(?:image\s+)?file/iu.test(signature)) {
       throw new Error(`Unsupported T64 signature: ${signature === '' ? '(empty)' : signature}.`);
     }
 
@@ -94,7 +94,7 @@ export class T64Image {
         directoryIndex: index,
         entryType,
         cbmFileTypeByte,
-        fileType: decodeCbmFileType(cbmFileTypeByte),
+        fileType: decodeT64FileType(entryType, cbmFileTypeByte),
         startAddress: readLe16(copy, offset + 2),
         declaredEndAddress: readLe16(copy, offset + 4),
         dataOffset: readLe32(copy, offset + 8),
@@ -176,6 +176,14 @@ function materializeEntry(
     byteLength,
     loadable: entry.entryType === 1 && entry.fileType === 'PRG' && byteLength > 0
   };
+}
+
+function decodeT64FileType(entryType: number, value: number): T64CbmFileType {
+  // Historical C64S/transfer tools commonly wrote 0x01 or 0x44 in the CBM
+  // file-type byte for normal memory-loaded tape files. Treat those known
+  // malformed values as PRG so surviving legacy T64 game images remain usable.
+  if (entryType === 1 && (value === 0x01 || value === 0x44)) return 'PRG';
+  return decodeCbmFileType(value);
 }
 
 function decodeCbmFileType(value: number): T64CbmFileType {

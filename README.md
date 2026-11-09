@@ -2,7 +2,7 @@
 
 A from-scratch Commodore 64 emulator written in TypeScript for the browser.
 
-Version **1.0.0** is the first release milestone of the browser emulator. It combines the cycle-stepped 6510/CIA/VIC/SID motherboard, firmware-driven 1541/IEC disk path, writable D64/G64 media, PRG/T64 host-assisted loading, TAP playback/recording, banked cartridges, debugger/monitor, save states, persistent browser sessions, and selectable PAL/NTSC plus 6581/8580 profiles. The v1.0 release hardening pass also adds an explicit release audit, end-to-end BASIC/D64/T64 smoke coverage, safer browser-session reopening, and AudioWorklet startup cleanup.
+Version **1.0.1** is the first maintenance release of Browser64. It retains the v1.0 cycle-stepped 6510/CIA/VIC/SID motherboard, firmware-driven 1541/IEC disk path, writable D64/G64 media, PRG/T64 host-assisted loading, TAP playback/recording, banked cartridges, debugger/monitor, save states, persistent browser sessions, and selectable PAL/NTSC plus 6581/8580 profiles. Version 1.0.1 adds structural BASIC-bootstrap detection for PRGs that begin below `$0801`, correct host-assisted launch semantics for those loaders, the completed-frame VIC display fix, and a full operator handbook at `documents/OPERATORS_GUIDE.md`.
 
 ## Current Capabilities
 
@@ -82,8 +82,9 @@ Version **1.0.0** is the first release milestone of the browser emulator. It com
 - canonical two-byte little-endian `.PRG` load-address parsing
 - physical-RAM loading including RAM beneath banked ROM
 - bounds validation
-- `$0801` BASIC program pointer initialization (`TXTTAB`, `VARTAB`, `ARYTAB`, `STREND`)
-- explicit machine-code “load + jump to load address” action
+- structural detection of a tokenized BASIC bootstrap at `$0801`, including PRGs whose load address is below BASIC
+- BASIC pointer initialization (`TXTTAB`, `VARTAB`, `ARYTAB`, `STREND`) for detected bootstraps
+- host-assisted Load + Run/Start queues BASIC `RUN` when a bootstrap is detected and otherwise starts at the PRG load address
 - file picker and drag/drop browser workflow
 
 ### D64 Disk Images and IEC
@@ -96,7 +97,8 @@ Version **1.0.0** is the first release milestone of the browser emulator. It com
 - DEL/SEQ/PRG/USR/REL type decoding and file flags
 - loop- and bounds-safe linked file extraction
 - PRG extraction retains the native two-byte load-address header
-- browser directory browser and host-assisted PRG load/jump workflow
+- browser directory browser and host-assisted PRG Load Only / Load + Run/Start workflow
+- nonstandard/unreadable directory chains no longer prevent the same D64 from remaining available to the 1541 true-drive path
 - open-collector serial IEC ATN/CLOCK/DATA/RESET bus abstraction
 - real C64 CIA2 PA3/PA4/PA5 inverted output wiring
 - real CIA2 PA6/PA7 CLOCK/DATA input feedback
@@ -106,10 +108,10 @@ Version **1.0.0** is the first release milestone of the browser emulator. It com
 
 ### T64 Tape Containers
 
-- legacy C64S/VICE `.T64` header and directory parsing
+- legacy C64S/VICE `.T64` header and directory parsing, including older `C64S tape file` signatures
 - normal tape-file (`entry type 1`) PRG extraction
 - multi-entry browser selection
-- host-assisted BASIC load or explicit machine-code load+jump
+- host-assisted Load Only / Load + Run/Start with the same BASIC-bootstrap detector used by PRG/D64 loading
 - compatibility fallback for the historical conv64 bogus `$C3C6` end-address pattern
 - session persistence and automatic T64 restoration
 - intentionally separate from TAP: T64 is a host-side file container, while TAP drives the cycle-timed Datasette signal path
@@ -208,17 +210,17 @@ After loading all three ROMs, click **Power On**. The machine starts at the real
 
 Wait for the normal Commodore BASIC `READY.` prompt, click the display, and type program lines exactly as on a C64. The browser input adapter drives the physical CIA1 keyboard matrix rather than injecting text. `RUN`, `LIST`, editing keys, quotes, colon, cursor keys, function keys, RUN/STOP, Commodore, and both shift-key paths are represented.
 
-For a BASIC `.PRG`, load the file after `READY.` and type `RUN`. Use **Load + Jump to Address** only for machine-code files whose entry point is intentionally the PRG load address.
+For host-assisted loading, **Load Only** copies the PRG without launching it. **Load + Run/Start** examines the loaded bytes for a structurally valid tokenized BASIC bootstrap at `$0801`, including PRGs that begin below `$0801`. A detected bootstrap queues `RUN` through the KERNAL keyboard buffer; otherwise the action starts execution at the PRG load address. Custom loaders with a different entry point should be started according to their original instructions or through the true-drive path.
 
 ### D64 / G64 disk games
 
-A `.D64` can be mounted and browsed immediately; a PRG entry can be sent through **Host-assisted Load** for convenience. For normal multi-file games and software that talks to the drive, supply a 16 KiB 1541 DOS ROM and use the firmware-driven 1541/IEC path from BASIC/KERNAL (`LOAD`, directory commands, and software loaders). Writable D64 media is committed back to sectors and can be exported. G64 is the raw-GCR path for full/half tracks and variable speed zones.
+A `.D64` can be mounted and browsed immediately; a PRG entry can be sent through **Host-assisted Load Only** for convenience. **Host-assisted Load + Run/Start** uses the structural BASIC-bootstrap detector rather than assuming that a PRG load address is its entry point; loaders that begin below `$0801` but contain a BASIC launcher at `$0801` therefore follow the BASIC `RUN` path. For normal multi-file games and software that talks to the drive, supply a 16 KiB 1541 DOS ROM and use the firmware-driven 1541/IEC path from BASIC/KERNAL (`LOAD`, directory commands, and software loaders). Writable D64 media is committed back to sectors and can be exported. G64 is the raw-GCR path for full/half tracks and variable speed zones.
 
 The true-drive path is intentionally preferred for software that depends on 1541 behavior. Very aggressive copy protection can still depend on analog PLL/weak-bit behavior beyond the v1.0 accuracy boundary.
 
 ### T64
 
-Open a `.T64` in the T64 panel, select a normal PRG entry, and use **Host-assisted Load**. BASIC entries at `$0801` update BASIC pointers and can then be started with `RUN`. **Load + Jump** is an explicit convenience for machine-code entries whose entry point is their load address. T64 is a file container rather than pulse timing, so `.TAP` remains the physical Datasette path.
+Open a `.T64` in the T64 panel, select a normal PRG entry, and use **Host-assisted Load Only** when you only want the bytes placed in RAM. **Load + Run/Start** applies the same BASIC-bootstrap detector used for standalone PRG and D64 loading, then either queues `RUN` or falls back to the PRG load address. T64 is a file container rather than pulse timing, so `.TAP` remains the physical Datasette path.
 
 ## Build
 
@@ -244,7 +246,7 @@ The Klaus Dormann functional test remains optional. If you possess the 64 KiB `6
 tests/assets/6502_functional_test.bin
 ```
 
-## v1.0 Architecture
+## v1.0.1 Architecture
 
 ```text
 Browser adapters + persistent session
@@ -281,7 +283,7 @@ Every browser-independent hardware directory under `src/core/` is documented wit
 Current documentation includes:
 
 - `README.md` — release capabilities, usage, and accuracy boundaries
-- `VERIFICATION.md` — v1.0 verification and release gates
+- `VERIFICATION.md` — v1.0.1 verification and release gates
 - `src/core/README.md` — core architecture
 - `src/core/cpu/README.md`
 - `src/core/memory/README.md`
@@ -303,11 +305,12 @@ Current documentation includes:
 - `src/input/README.md` — browser input adapter
 - `src/session/README.md` — browser persistence/save-state boundary
 - `tests/assets/README.md` — optional external regression assets
-- `src/core/sid/SID_API_REFERENCE_MANUAL_V1.md` — SID reference-manual plan aligned to the v1.0 implementation
+- `src/core/sid/SID_API_REFERENCE_MANUAL_V1.md` — SID reference-manual plan aligned to the v1.x implementation
+- `documents/OPERATORS_GUIDE.md` — complete Browser64 operating handbook, including BASIC, media workflows, and 1541 true-drive operation
 
-## v1.0 Release Scope
+## v1.0.1 Release Scope
 
-The v1.0 support target is a usable browser C64 for ordinary BASIC development and a broad class of real software: keyboard/joystick input, ROM boot, PRG/T64 host loading, D64/G64 through the 1541 path, TAP playback/recording, supported cartridges, SID audio, debugging, and persistent sessions/save states. Unknown or unimplemented hardware behavior is not silently fabricated.
+The v1.0.1 support target is a usable browser C64 for ordinary BASIC development and a broad class of real software: keyboard/joystick input, ROM boot, PRG/T64 host loading, D64/G64 through the 1541 path, TAP playback/recording, supported cartridges, SID audio, debugging, and persistent sessions/save states. Unknown or unimplemented hardware behavior is not silently fabricated.
 
 The release gate is:
 

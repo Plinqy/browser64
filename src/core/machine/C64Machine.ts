@@ -13,7 +13,7 @@ import { TraceFormatter } from '../debugger/TraceFormatter';
 import { C64Monitor } from '../debugger/Monitor';
 import type { JoystickControl, JoystickPort } from '../io/C64Io';
 import { C64Bus, type C64BusState } from '../memory/C64Bus';
-import { parsePrg, type PrgLoadResult } from '../program/Prg';
+import { detectBasicBootstrap, parsePrg, type PrgLoadResult } from '../program/Prg';
 import type { C64RomKind } from '../rom/RomSet';
 import type { SidChipModel } from '../sid/SidModel';
 import { TapImage } from '../tape/TapImage';
@@ -24,6 +24,7 @@ export interface C64MachineOptions {
   readonly sidModel?: SidChipModel;
 }
 
+export type PrgLaunchMode = 'basic-run' | 'machine-code-jump';
 
 export interface C64MachineState {
   readonly format: 'c64-browser-emulator-state';
@@ -321,16 +322,17 @@ export class C64Machine {
   }
 
   /**
-   * Load a PRG into physical RAM. A normal BASIC PRG at $0801 also refreshes
-   * BASIC's text/variable boundary pointers so LIST/RUN can consume it.
+   * Load a PRG into physical RAM. A conventional BASIC bootstrap at $0801 also
+   * refreshes BASIC's text/variable pointers, even when the file starts below it.
    */
   loadPrg(bytes: ArrayLike<number>, initializeBasicPointers = true): PrgLoadResult {
     const parsed = parsePrg(bytes);
+    const basicBootstrap = detectBasicBootstrap(parsed);
     this.bus.loadRam(parsed.payload, parsed.loadAddress);
 
-    const initializeBasic = initializeBasicPointers && parsed.loadAddress === 0x0801;
+    const initializeBasic = initializeBasicPointers && basicBootstrap !== null;
     if (initializeBasic) {
-      this.writeWordToRam(0x002b, parsed.loadAddress); // TXTTAB
+      this.writeWordToRam(0x002b, basicBootstrap.startAddress); // TXTTAB
       this.writeWordToRam(0x002d, parsed.endAddressExclusive); // VARTAB
       this.writeWordToRam(0x002f, parsed.endAddressExclusive); // ARYTAB
       this.writeWordToRam(0x0031, parsed.endAddressExclusive); // STREND
@@ -340,8 +342,21 @@ export class C64Machine {
       loadAddress: parsed.loadAddress,
       endAddressExclusive: parsed.endAddressExclusive,
       byteLength: parsed.payload.length,
+      basicBootstrapDetected: basicBootstrap !== null,
+      basicBootstrapAddress: basicBootstrap?.startAddress ?? null,
       basicPointersInitialized: initializeBasic
     };
+  }
+
+  /** Start a just-loaded PRG using C64-appropriate host-assisted semantics. */
+  launchPrg(result: PrgLoadResult): PrgLaunchMode {
+    if (result.basicPointersInitialized) {
+      this.queueBasicRunCommand();
+      return 'basic-run';
+    }
+
+    this.startAt(result.loadAddress);
+    return 'machine-code-jump';
   }
 
   /** Explicit host/debugger launch point for a machine-code PRG. */
@@ -439,6 +454,15 @@ export class C64Machine {
   private writeWordToRam(address: number, value: number): void {
     this.bus.writePhysicalRam(address, value & 0xff);
     this.bus.writePhysicalRam(address + 1, (value >> 8) & 0xff);
+  }
+
+  /** Queue RUN through the standard ten-byte KERNAL keyboard buffer. */
+  private queueBasicRunCommand(): void {
+    const command = [0x52, 0x55, 0x4e, 0x0d]; // PETSCII "RUN" + RETURN
+    for (let index = 0; index < command.length; index += 1) {
+      this.bus.writePhysicalRam(0x0277 + index, command[index]!);
+    }
+    this.bus.writePhysicalRam(0x00c6, command.length);
   }
 
   private syncInterruptLines(): void {

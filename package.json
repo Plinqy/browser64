@@ -1,6 +1,6 @@
 {
   "name": "c64-browser-emulator",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "private": true,
   "type": "module",
   "description": "From-scratch browser Commodore 64 emulator \u2014 cycle-stepped core with true-drive D64/G64, T64/PRG loading, TAP playback/recording, save states, persistent sessions, PAL/NTSC profiles, and selectable 6581/8580 SID",

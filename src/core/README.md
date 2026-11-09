@@ -4,7 +4,7 @@
 
 `src/core` is the browser-independent Commodore 64 hardware model. It does not depend on DOM, Canvas, Web Audio, host timers, keyboard-event names, file pickers, IndexedDB, or wall-clock state.
 
-The v1.0 core contains:
+The v1.0.1 core contains:
 
 - `cpu/` — cycle-steppable MOS 6510/NMOS 6502 engine for all documented and stable undocumented opcodes, including interrupt polling and JAM behavior.
 - `memory/` — CPU PLA banking, cartridge GAME/EXROM participation, shared data-bus/open-bus state, physical RAM, and the VIC's independent memory view.

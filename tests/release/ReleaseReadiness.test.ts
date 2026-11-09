@@ -8,9 +8,9 @@ import { EMULATOR_VERSION } from '../../src/release';
 
 const D64_SIZE_35 = 174_848;
 
-describe('v1.0 release readiness', () => {
-  it('publishes the v1.0 release version', () => {
-    expect(EMULATOR_VERSION).toBe('1.0.0');
+describe('v1.0.1 release readiness', () => {
+  it('publishes the v1.0.1 release version', () => {
+    expect(EMULATOR_VERSION).toBe('1.0.1');
   });
 
   it('accepts the host-key classes needed to enter a BASIC program', () => {
@@ -45,6 +45,9 @@ describe('v1.0 release readiness', () => {
     expect(machine.bus.readPhysicalRam(0x0801)).toBe(0x0b);
     expect(machine.bus.readPhysicalRam(0x002b)).toBe(0x01);
     expect(machine.bus.readPhysicalRam(0x002c)).toBe(0x08);
+    expect(machine.launchPrg(result)).toBe('basic-run');
+    expect(machine.bus.readPhysicalRam(0x0277)).toBe(0x52);
+    expect(machine.bus.readPhysicalRam(0x00c6)).toBe(4);
   });
 
   it('extracts a BASIC PRG from T64 and loads it through the same machine loader', () => {
@@ -72,7 +75,7 @@ function makeD64WithBasicPrg(): Uint8Array {
   directory[30] = 1;
 
   const data = d64Sector(bytes, 1, 0);
-  const prg = new Uint8Array([0x01, 0x08, 0x0b, 0x08, 0x0a, 0x00, 0x00, 0x00]);
+  const prg = new Uint8Array([0x01, 0x08, 0x07, 0x08, 0x0a, 0x00, 0x99, 0x00, 0x00, 0x00]);
   data[0] = 0;
   data[1] = prg.length + 1;
   data.set(prg, 2);

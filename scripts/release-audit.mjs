@@ -3,7 +3,7 @@ import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
-const expectedVersion = '1.0.0';
+const expectedVersion = '1.0.1';
 const failures = [];
 
 function fail(message) {
@@ -28,13 +28,18 @@ for (const path of markdownFiles) {
 }
 
 const readme = await readFile(join(root, 'README.md'), 'utf8');
-if (!readme.includes('Version **1.0.0**')) fail('README.md does not identify Version 1.0.0.');
+if (!readme.includes('Version **1.0.1**')) fail('README.md does not identify Version 1.0.1.');
 for (const required of ['Enter BASIC programs', 'D64 / G64', 'T64', 'Known accuracy boundaries']) {
   if (!readme.includes(required)) fail(`README.md is missing the release section/phrase: ${required}`);
 }
 
 const verification = await readFile(join(root, 'VERIFICATION.md'), 'utf8');
-if (!verification.startsWith('# v1.0 Verification')) fail('VERIFICATION.md is not the v1.0 verification document.');
+if (!verification.startsWith('# v1.0.1 Verification')) fail('VERIFICATION.md is not the v1.0.1 verification document.');
+
+const operatorsGuide = await readFile(join(root, 'documents', 'OPERATORS_GUIDE.md'), 'utf8');
+for (const required of ["Browser64 Operator's Guide", '1541 True Drive', 'Host-assisted loading', 'Troubleshooting']) {
+  if (!operatorsGuide.includes(required)) fail(`documents/OPERATORS_GUIDE.md is missing: ${required}`);
+}
 
 const coreRoot = join(root, 'src/core');
 for (const entry of await readdir(coreRoot, { withFileTypes: true })) {

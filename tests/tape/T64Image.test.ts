@@ -80,6 +80,16 @@ describe('T64 image parser', () => {
     expect([...image.readPrg(entry)]).toEqual([0x00, 0x20, 0xa9, 0x2a, 0x60]);
   });
 
+  it('accepts older C64S tape files and their common malformed PRG type byte', () => {
+    const bytes = makeT64();
+    writeAscii(bytes, 0, 32, 'C64S tape file\r\nDemo tape');
+    bytes[65] = 0x44;
+
+    const image = parseT64(bytes);
+    expect(image.header.signature).toMatch(/^C64S tape file/);
+    expect(image.listDirectory()[0]).toMatchObject({ fileType: 'PRG', loadable: true });
+  });
+
   it('rejects non-T64 signatures and truncated directory tables', () => {
     expect(() => parseT64(new Uint8Array(64))).toThrow(/signature/i);
 

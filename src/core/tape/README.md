@@ -29,6 +29,6 @@ C64 TAP v2 is intentionally rejected: the v2 half-wave extension belongs to the 
 
 ## T64 Container Boundary
 
-`T64Image` accepts the common C64S/VICE T64 header, lists non-free directory entries, and exposes normal PRG entries as canonical two-byte-load-address PRG streams. Normal entry type 1 is the supported execution path, matching the format subset that is actually common in the wild. Historical files with the known bogus `$C3C6` end address fall back to the physical payload boundary.
+`T64Image` accepts the common C64S/VICE T64 header plus the older `C64S tape file` signature found in historical archives, lists non-free directory entries, and exposes normal PRG entries as canonical two-byte-load-address PRG streams. Normal entry type 1 is the supported execution path. Compatibility handling treats the known malformed `0x01`/`0x44` CBM file-type bytes from legacy T64 creators as PRG and retains the existing `$C3C6` bogus-end-address fallback to the physical payload boundary.
 
 T64 is intentionally read-only and host-assisted. A T64 does not encode cassette pulse timing, so feeding it into `Datasette` would invent hardware behavior that is not present in the file. Use TAP for true cassette emulation.

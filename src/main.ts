@@ -18,6 +18,8 @@ import {
   type D64DirectoryEntry,
   type D64Image,
   type MonitorStopReason,
+  type PrgLaunchMode,
+  type PrgLoadResult,
   type T64DirectoryEntry,
   type T64Image,
   type RawCartridgeMode,
@@ -43,7 +45,14 @@ let running = false;
 let lastError = '';
 let audioError = '';
 let selectedPrg: { name: string; bytes: Uint8Array } | null = null;
-let mountedD64: { name: string; image: D64Image; entries: readonly D64DirectoryEntry[] } | null = null;
+interface MountedD64 {
+  readonly name: string;
+  readonly image: D64Image;
+  readonly entries: readonly D64DirectoryEntry[];
+  readonly directoryError: string;
+}
+
+let mountedD64: MountedD64 | null = null;
 let selectedD64Prg: D64DirectoryEntry | null = null;
 let mountedT64: { name: string; image: T64Image; entries: readonly T64DirectoryEntry[] } | null = null;
 let selectedT64Prg: T64DirectoryEntry | null = null;
@@ -156,8 +165,8 @@ app.innerHTML = `
       </div>
       <div class="program-controls">
         <input id="prg-file" type="file" accept=".prg,application/octet-stream" />
-        <button id="load-prg" disabled>Load PRG</button>
-        <button id="run-prg" disabled>Load + Jump to Address</button>
+        <button id="load-prg" disabled>Load Only</button>
+        <button id="run-prg" disabled>Load + Run/Start</button>
       </div>
     </article>
 
@@ -165,7 +174,7 @@ app.innerHTML = `
       <div class="panel-heading">
         <div>
           <h2>D64 Disk Image</h2>
-          <p>Browse a 1541 D64 and host-load PRGs directly. This accelerated path is intentionally separate from the physical IEC bus and is not 1541 emulation.</p>
+          <p>Browse a 1541 D64 and host-load PRGs directly. Load + Run/Start detects a tokenized BASIC bootstrap at $0801 even when the PRG begins below it; otherwise it starts at the PRG load address. The same D64 is also mounted in the true drive for later device-8 access.</p>
         </div>
         <div id="d64-status" class="status-pill">No disk mounted</div>
       </div>
@@ -177,8 +186,8 @@ app.innerHTML = `
             <option value="">No PRG available</option>
           </select>
         </label>
-        <button id="load-d64-prg" disabled>Host-assisted Load</button>
-        <button id="run-d64-prg" disabled>Host-assisted Load + Jump</button>
+        <button id="load-d64-prg" disabled>Host-assisted Load Only</button>
+        <button id="run-d64-prg" disabled>Host-assisted Load + Run/Start</button>
       </div>
       <pre id="d64-directory" class="disk-directory">Mount a D64 to browse its directory.</pre>
     </article>
@@ -199,8 +208,8 @@ app.innerHTML = `
             <option value="">No PRG available</option>
           </select>
         </label>
-        <button id="load-t64-prg" disabled>Host-assisted Load</button>
-        <button id="run-t64-prg" disabled>Host-assisted Load + Jump</button>
+        <button id="load-t64-prg" disabled>Host-assisted Load Only</button>
+        <button id="run-t64-prg" disabled>Host-assisted Load + Run/Start</button>
       </div>
       <pre id="t64-directory" class="disk-directory">Choose a T64 to browse its entries.</pre>
     </article>
@@ -896,23 +905,24 @@ async function selectPrg(file: File): Promise<void> {
   render();
 }
 
-function loadSelectedPrg(jumpToLoadAddress: boolean): void {
+function loadSelectedPrg(launchAfterLoad: boolean): void {
   if (!poweredOn || selectedPrg === null) {
     return;
   }
 
   try {
     const result = machine.loadPrg(selectedPrg.bytes);
-    if (jumpToLoadAddress) {
-      machine.startAt(result.loadAddress);
+    if (launchAfterLoad) {
+      const launchMode = machine.launchPrg(result);
       traceLines.push(
-        `PRG ${selectedPrg.name} -> $${hex(result.loadAddress, 4)}-$${hex(result.endAddressExclusive - 1, 4)}; PC=$${hex(result.loadAddress, 4)}`
+        `PRG ${selectedPrg.name} -> $${hex(result.loadAddress, 4)}-$${hex(result.endAddressExclusive - 1, 4)}; ` +
+        describeHostLaunch(result, launchMode)
       );
       setRunning(true);
     } else {
       traceLines.push(
         `PRG ${selectedPrg.name} -> $${hex(result.loadAddress, 4)}-$${hex(result.endAddressExclusive - 1, 4)}` +
-        (result.basicPointersInitialized ? ' (BASIC pointers updated)' : '')
+        (result.basicPointersInitialized ? ' (BASIC bootstrap detected; pointers updated)' : '')
       );
     }
     lastError = '';
@@ -929,10 +939,9 @@ async function mountD64(file: File): Promise<void> {
   try {
     const bytes = new Uint8Array(await file.arrayBuffer());
     const image = parseD64(bytes);
-    const entries = image.listDirectory();
     await browserSessionStore.putAsset('disk-1541', { name: file.name, bytes, mediaType: 'd64', writeProtected: false });
-    mountedD64 = { name: file.name, image, entries };
-    selectedD64Prg = entries.find((entry) => entry.fileType === 'PRG') ?? null;
+    mountedD64 = inspectD64(file.name, image);
+    selectedD64Prg = mountedD64.entries.find((entry) => entry.fileType === 'PRG') ?? null;
     lastError = '';
     renderD64Directory();
   } catch (error) {
@@ -942,6 +951,14 @@ async function mountD64(file: File): Promise<void> {
 
   updateControls();
   render();
+}
+
+function inspectD64(name: string, image: D64Image): MountedD64 {
+  try {
+    return { name, image, entries: image.listDirectory(), directoryError: '' };
+  } catch (error) {
+    return { name, image, entries: [], directoryError: errorMessage(error) };
+  }
 }
 
 function clearMountedD64(): void {
@@ -961,16 +978,20 @@ function renderD64Directory(): void {
     return;
   }
 
-  const { image, entries, name } = mountedD64;
+  const { image, entries, name, directoryError } = mountedD64;
   const geometry = image.geometry;
   const diskName = image.header.name === '' ? '(unnamed)' : image.header.name;
-  d64StatusElement.textContent = `${diskName} · ${geometry.tracks} tracks · ${entries.length} files`;
+  d64StatusElement.textContent = directoryError === ''
+    ? `${diskName} · ${geometry.tracks} tracks · ${entries.length} files`
+    : `${diskName} · ${geometry.tracks} tracks · directory unavailable`;
   d64StatusElement.title = `${name}${image.header.id === '' ? '' : ` · ID ${image.header.id}`}`;
   d64StatusElement.classList.add('ready');
 
-  d64DirectoryElement.textContent = entries.length === 0
-    ? 'Directory is empty.'
-    : entries.map((entry) => formatD64DirectoryEntry(entry)).join('\n');
+  d64DirectoryElement.textContent = directoryError !== ''
+    ? `Directory could not be parsed (${directoryError}). The image remains available to the 1541 true-drive path.`
+    : entries.length === 0
+      ? 'Directory is empty.'
+      : entries.map((entry) => formatD64DirectoryEntry(entry)).join('\n');
 
   const prgs = entries.filter((entry) => entry.fileType === 'PRG');
   d64PrgSelect.replaceChildren();
@@ -990,7 +1011,7 @@ function renderD64Directory(): void {
   d64PrgSelect.value = String(selected.directoryIndex);
 }
 
-function loadSelectedD64Prg(jumpToLoadAddress: boolean): void {
+function loadSelectedD64Prg(launchAfterLoad: boolean): void {
   if (!poweredOn || mountedD64 === null || selectedD64Prg === null) {
     return;
   }
@@ -1000,12 +1021,17 @@ function loadSelectedD64Prg(jumpToLoadAddress: boolean): void {
     const result = machine.loadPrg(bytes);
     const prefix = `D64 HOST LOAD "${selectedD64Prg.filename}" -> $${hex(result.loadAddress, 4)}-$${hex(result.endAddressExclusive - 1, 4)}`;
 
-    if (jumpToLoadAddress) {
-      machine.startAt(result.loadAddress);
-      traceLines.push(`${prefix}; PC=$${hex(result.loadAddress, 4)}`);
+    if (launchAfterLoad) {
+      const launchMode = machine.launchPrg(result);
+      traceLines.push(
+        `${prefix}; ${describeHostLaunch(result, launchMode)}`
+      );
+      if (!machine.drive1541.romLoaded) {
+        traceLines.push('D64 NOTE: 1541 DOS ROM is not loaded; later device-8 file access will not work.');
+      }
       setRunning(true);
     } else {
-      traceLines.push(prefix + (result.basicPointersInitialized ? ' (BASIC pointers updated)' : ''));
+      traceLines.push(prefix + (result.basicPointersInitialized ? ' (BASIC bootstrap detected; pointers updated)' : ''));
     }
 
     lastError = '';
@@ -1016,6 +1042,14 @@ function loadSelectedD64Prg(jumpToLoadAddress: boolean): void {
 
   updateControls();
   render();
+}
+
+function describeHostLaunch(result: PrgLoadResult, launchMode: PrgLaunchMode): string {
+  if (launchMode === 'basic-run') {
+    const address = result.basicBootstrapAddress ?? 0x0801;
+    return `BASIC bootstrap at $${hex(address, 4)}; RUN queued`;
+  }
+  return `no BASIC bootstrap detected; PC=$${hex(result.loadAddress, 4)}`;
 }
 
 function formatD64DirectoryEntry(entry: D64DirectoryEntry): string {
@@ -1091,7 +1125,7 @@ function renderT64Directory(): void {
   t64PrgSelect.value = String(selected.directoryIndex);
 }
 
-function loadSelectedT64Prg(jumpToLoadAddress: boolean): void {
+function loadSelectedT64Prg(launchAfterLoad: boolean): void {
   if (!poweredOn || mountedT64 === null || selectedT64Prg === null) return;
 
   try {
@@ -1099,12 +1133,14 @@ function loadSelectedT64Prg(jumpToLoadAddress: boolean): void {
     const result = machine.loadPrg(bytes);
     const prefix = `T64 HOST LOAD "${selectedT64Prg.filename}" -> $${hex(result.loadAddress, 4)}-$${hex(result.endAddressExclusive - 1, 4)}`;
 
-    if (jumpToLoadAddress) {
-      machine.startAt(result.loadAddress);
-      traceLines.push(`${prefix}; PC=$${hex(result.loadAddress, 4)}`);
+    if (launchAfterLoad) {
+      const launchMode = machine.launchPrg(result);
+      traceLines.push(
+        `${prefix}; ${describeHostLaunch(result, launchMode)}`
+      );
       setRunning(true);
     } else {
-      traceLines.push(prefix + (result.basicPointersInitialized ? ' (BASIC pointers updated)' : ''));
+      traceLines.push(prefix + (result.basicPointersInitialized ? ' (BASIC bootstrap detected; pointers updated)' : ''));
     }
 
     lastError = '';
@@ -1213,9 +1249,8 @@ function applySessionAssets(session: RestoredBrowserSession): void {
   const disk = assets['disk-1541'];
   if (disk?.mediaType === 'd64') {
     const image = parseD64(disk.bytes);
-    const entries = image.listDirectory();
-    mountedD64 = { name: disk.name, image, entries };
-    selectedD64Prg = entries.find((entry) => entry.fileType === 'PRG') ?? null;
+    mountedD64 = inspectD64(disk.name, image);
+    selectedD64Prg = mountedD64.entries.find((entry) => entry.fileType === 'PRG') ?? null;
     renderD64Directory();
     machine.mountD64In1541(disk.bytes, disk.writeProtected ?? false);
   } else if (disk?.mediaType === 'g64') {

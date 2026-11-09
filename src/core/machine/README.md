@@ -68,9 +68,9 @@ Host-assisted D64 parsing is not a machine timing operation: the storage layer c
 
 ### PRG loading
 
-`loadPrg()` parses a two-byte little-endian load address, copies payload bytes into physical RAM, and returns load metadata. When the address is `$0801`, it can update BASIC's `TXTTAB`, `VARTAB`, `ARYTAB`, and `STREND` pointers. It does not assume the load address is executable.
+`loadPrg()` parses a two-byte little-endian load address, copies payload bytes into physical RAM, and runs structural BASIC-bootstrap detection against the memory image at `$0801`. A PRG may therefore begin below `$0801` and still be recognized as a BASIC launcher. Detected bootstraps update BASIC's `TXTTAB`, `VARTAB`, `ARYTAB`, and `STREND` pointers. The load address itself is never assumed to prove the execution model.
 
-`startAt()` is the explicit debugger/host escape hatch for machine-code files whose entry point is known. It deliberately discards any partially scheduled CPU instruction before changing PC.
+`launchPrg()` is the host-assisted convenience for a just-loaded PRG: detected BASIC bootstraps queue `RUN` through the KERNAL keyboard buffer, while PRGs without a detected bootstrap fall back to their load address. `startAt()` remains the explicit debugger/host escape hatch for a known machine-code entry point and deliberately discards any partially scheduled CPU instruction before changing PC.
 
 ### Save states
 

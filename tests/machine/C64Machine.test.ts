@@ -45,7 +45,7 @@ describe('C64Machine', () => {
 describe('C64Machine PRG loading', () => {
   it('loads a BASIC PRG into physical RAM and updates BASIC boundaries', () => {
     const machine = new C64Machine();
-    const prg = Uint8Array.of(0x01, 0x08, 0x0b, 0x08, 0x0a, 0x00, 0x99, 0x00, 0x00, 0x00);
+    const prg = Uint8Array.of(0x01, 0x08, 0x07, 0x08, 0x0a, 0x00, 0x99, 0x00, 0x00, 0x00);
 
     const result = machine.loadPrg(prg);
 
@@ -73,6 +73,41 @@ describe('C64Machine PRG loading', () => {
     expect(machine.bus.readPhysicalRam(0x002e)).toBe(0xbb);
 
     machine.startAt(result.loadAddress);
+    expect(machine.cpu.pc).toBe(0xc000);
+  });
+
+
+  it('detects a BASIC bootstrap at $0801 inside a PRG that loads below BASIC', () => {
+    const machine = new C64Machine();
+    const bytes = new Uint8Array(2 + 0x50);
+    bytes[0] = 0xc0;
+    bytes[1] = 0x07;
+    const offset = 2 + (0x0801 - 0x07c0);
+    bytes.set([0x0c, 0x08, 0xc9, 0x07, 0x9e, 0x32, 0x30, 0x36, 0x34, 0x20, 0x00, 0xa0, 0x00], offset);
+
+    const result = machine.loadPrg(bytes);
+
+    expect(result.loadAddress).toBe(0x07c0);
+    expect(result.basicBootstrapDetected).toBe(true);
+    expect(result.basicBootstrapAddress).toBe(0x0801);
+    expect(result.basicPointersInitialized).toBe(true);
+    expect(machine.bus.readPhysicalRam(0x002b)).toBe(0x01);
+    expect(machine.bus.readPhysicalRam(0x002c)).toBe(0x08);
+    expect(machine.launchPrg(result)).toBe('basic-run');
+  });
+
+  it('launches BASIC PRGs through RUN and machine-code PRGs at their load address', () => {
+    const machine = new C64Machine();
+    const basic = machine.loadPrg(Uint8Array.of(0x01, 0x08, 0x07, 0x08, 0x0a, 0x00, 0x99, 0x00, 0x00, 0x00));
+
+    expect(machine.launchPrg(basic)).toBe('basic-run');
+    expect([0x0277, 0x0278, 0x0279, 0x027a].map((address) => machine.bus.readPhysicalRam(address))).toEqual([
+      0x52, 0x55, 0x4e, 0x0d
+    ]);
+    expect(machine.bus.readPhysicalRam(0x00c6)).toBe(4);
+
+    const machineCode = machine.loadPrg(Uint8Array.of(0x00, 0xc0, 0xea, 0x60));
+    expect(machine.launchPrg(machineCode)).toBe('machine-code-jump');
     expect(machine.cpu.pc).toBe(0xc000);
   });
 });
